@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Devil Dice 3D</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="manifest" href="manifest.json">
+    <!-- Three.js Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+    <!-- Game Container -->
+    <div id="game-container"></div>
+
+    <!-- UI Overlay -->
+    <div id="ui-container">
+        <!-- Main Menu -->
+        <div id="menu-screen" class="screen active">
+            <div class="menu-content">
+                <h1 class="game-title">DEVIL DICE <span class="accent">3D</span></h1>
+                <p class="tagline">Roll, Match, and Chain in Isometric 3D</p>
+                
+                <div class="menu-sections">
+                    <button id="start-btn" class="menu-btn primary">START GAME</button>
+                    <button id="how-to-btn" class="menu-btn">HOW TO PLAY</button>
+                    <button id="settings-btn" class="menu-btn">CONTROLS & SETTINGS</button>
+                </div>
+
+                <div class="high-score-display">
+                    High Score: <span id="menu-highscore">0</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- How To Play Modal -->
+        <div id="how-to-modal" class="modal">
+            <div class="modal-content">
+                <h2>HOW TO PLAY</h2>
+                <div class="modal-body">
+                    <p>You control a small devil on a grid filled with 3D dice. Clear dice before the board fills up!</p>
+                    
+                    <h3>Core Rules</h3>
+                    <ul>
+                        <li><strong>Match Dice:</strong> Connect a group of dice showing the same value on top. The number of dice in the group must be <strong>at least</strong> that value (e.g., at least <strong>3</strong> dice showing <strong>3</strong>, or <strong>5</strong> dice showing <strong>5</strong>).</li>
+                        <li><strong>Sinking:</strong> Matched dice begin slowly sinking into the floor. While they sink, they can still be used as a walkway.</li>
+                        <li><strong>Chaining:</strong> Roll another die of the same value next to a sinking group to add it to the chain, restarting the sinking timer and getting huge point multipliers!</li>
+                        <li><strong>The Power of 1s:</strong> A die showing <strong>1</strong> on top cannot match on its own. However, if you roll a <strong>1</strong> next to <i>any</i> sinking group, it will immediately match and sink with them!</li>
+                    </ul>
+
+                    <h3>Movement & Controls</h3>
+                    <ul>
+                        <li><strong>On Top of Dice:</strong> Walk from die to die. Walk off the edge of a die to descend to the floor.</li>
+                        <li><strong>On the Floor:</strong> Walk against a die to <strong>push and slide</strong> it in that direction. Sliding does not change the top face value!</li>
+                        <li><strong>Climbing:</strong> Press the <strong>CLIMB</strong> button (or Spacebar) when facing a die to climb onto its top. Note: You can climb any die, but you cannot push a die if it's blocked.</li>
+                    </ul>
+
+                    <h3>Desktop Controls</h3>
+                    <p><strong>Move/Roll:</strong> Arrow keys or WASD (diagonal alignment for isometric board)<br>
+                       <strong>Climb/Descend:</strong> Spacebar or Enter</p>
+                </div>
+                <button id="close-how-to" class="menu-btn">BACK</button>
+            </div>
+        </div>
+
+        <!-- Settings Modal -->
+        <div id="settings-modal" class="modal">
+            <div class="modal-content">
+                <h2>SETTINGS & CONTROLS</h2>
+                <div class="modal-body">
+                    <div class="setting-row">
+                        <label for="control-mode">Control Type:</label>
+                        <select id="control-mode">
+                            <option value="diagonal">Diagonal D-Pad (Recommended)</option>
+                            <option value="swipe">Swipe / Swipe-and-Hold</option>
+                            <option value="joystick">Virtual Joystick</option>
+                        </select>
+                    </div>
+                    <div class="setting-row">
+                        <label for="sound-toggle">Sound Effects:</label>
+                        <input type="checkbox" id="sound-toggle" checked>
+                    </div>
+                    <div class="setting-row">
+                        <label for="music-toggle">BGM (Synth):</label>
+                        <input type="checkbox" id="music-toggle">
+                    </div>
+                    <div class="setting-row">
+                        <label for="difficulty">Spawn Speed:</label>
+                        <select id="difficulty">
+                            <option value="easy">Easy (Relaxed)</option>
+                            <option value="medium" selected>Medium (Standard)</option>
+                            <option value="hard">Hard (Fast Pace)</option>
+                        </select>
+                    </div>
+                </div>
+                <button id="close-settings" class="menu-btn">SAVE & CLOSE</button>
+            </div>
+        </div>
+
+        <!-- HUD Screen -->
+        <div id="hud-screen" class="screen">
+            <!-- Top Bar -->
+            <div class="hud-top">
+                <div class="hud-group">
+                    <div class="hud-label">SCORE</div>
+                    <div id="hud-score" class="hud-value">000,000</div>
+                </div>
+                <div class="hud-group center">
+                    <div id="capacity-warning" class="hud-label">BOARD FULLNESS</div>
+                    <div class="capacity-bar-container">
+                        <div id="capacity-bar" class="capacity-bar"></div>
+                    </div>
+                </div>
+                <div class="hud-group right">
+                    <div class="hud-label">HIGH SCORE</div>
+                    <div id="hud-highscore" class="hud-value">000,000</div>
+                </div>
+            </div>
+
+            <!-- Combo Multiplier / Status Overlay -->
+            <div id="combo-display" class="combo-hide">
+                <span id="combo-count">2</span> CHAIN COMBO!
+            </div>
+
+            <!-- Virtual Controls (Hidden on desktop if keys are used, but always active for touch) -->
+            <div id="touch-controls">
+                <!-- Isometric D-pad -->
+                <div class="dpad-container">
+                    <button id="dpad-ul" class="dpad-btn" data-dir="ul"><span>NW</span>↖</button>
+                    <button id="dpad-ur" class="dpad-btn" data-dir="ur"><span>NE</span>↗</button>
+                    <div class="dpad-center"></div>
+                    <button id="dpad-dl" class="dpad-btn" data-dir="dl"><span>SW</span>↙</button>
+                    <button id="dpad-dr" class="dpad-btn" data-dir="dr"><span>SE</span>↘</button>
+                </div>
+
+                <!-- Action Buttons -->
+                <div class="action-container">
+                    <button id="climb-btn" class="action-btn">CLIMB / ACTION</button>
+                    <button id="pause-btn" class="action-btn secondary">PAUSE</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Pause Screen -->
+        <div id="pause-screen" class="screen">
+            <div class="pause-content">
+                <h2>GAME PAUSED</h2>
+                <div class="pause-buttons">
+                    <button id="resume-btn" class="menu-btn primary">RESUME</button>
+                    <button id="restart-pause-btn" class="menu-btn">RESTART</button>
+                    <button id="quit-btn" class="menu-btn">QUIT TO MENU</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Game Over Screen -->
+        <div id="gameover-screen" class="screen">
+            <div class="gameover-content">
+                <h2 class="gameover-title">BOARD FILLED!</h2>
+                <p>GAME OVER</p>
+                
+                <div class="gameover-stats">
+                    <div class="stat-row">
+                        <span>Final Score:</span>
+                        <strong id="go-score">0</strong>
+                    </div>
+                    <div class="stat-row">
+                        <span>Max Chain Combo:</span>
+                        <strong id="go-combo">0</strong>
+                    </div>
+                    <div class="stat-row" id="new-high-indicator" style="display: none;">
+                        <span class="highlight">NEW HIGH SCORE!</span>
+                    </div>
+                </div>
+
+                <div class="gameover-buttons">
+                    <button id="retry-btn" class="menu-btn primary">PLAY AGAIN</button>
+                    <button id="menu-quit-btn" class="menu-btn">MAIN MENU</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Game Script -->
+    <script src="game.js"></script>
+</body>
+</html>
