@@ -43,7 +43,7 @@ var PALETTE = {
     hoverGlow: { bg: '#3a2a50', pips: '#44ff88', border: '#8877aa' }
 };
 var CELL_TYPE = { EMPTY: 0, ACTIVE: 1, LOCKED: 2 };
-var scene, camera, renderer, diceGroup, boardGroup;
+var scene, camera, renderer, diceGroup, boardGroup, worldGroup;
 var grid = [], score = 0, comboCount = 0;
 var sinkingHighlights = [];
 var highScore = localStorage.getItem('devildice_zen_hs') ? parseInt(localStorage.getItem('devildice_zen_hs')) : 0;
@@ -261,7 +261,8 @@ Die.prototype.updateSinking = function() { if (this.state !== 'sinking') return 
 function initEngine() {
     var container = document.getElementById('game-container'); container.innerHTML = '';
     scene = new THREE.Scene(); scene.background = new THREE.Color(PALETTE.boardFloor); scene.fog = new THREE.FogExp2(PALETTE.boardFloor, 0.02);
-    boardGroup = new THREE.Group(); diceGroup = new THREE.Group(); scene.add(boardGroup); scene.add(diceGroup);
+    worldGroup = new THREE.Group(); boardGroup = new THREE.Group(); diceGroup = new THREE.Group();
+    worldGroup.add(boardGroup); worldGroup.add(diceGroup); scene.add(worldGroup);
     renderer = new THREE.WebGLRenderer({ antialias: true }); renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     container.appendChild(renderer.domElement);
@@ -275,16 +276,25 @@ function initEngine() {
 }
 
 function setupOrthoCamera() {
-    var aspect = window.innerWidth / window.innerHeight, frustSize = Math.max(GRID_COLS, GRID_ROWS) * GRID_SPACING * 1.4, halfSize = frustSize / 2;
-    camera = new THREE.OrthographicCamera(-halfSize * aspect, halfSize * aspect, halfSize, -halfSize, 0.1, 50);
-    var dist = frustSize * 0.95, h = dist * 0.65; camera.position.set(dist * 0.55, h, dist * 0.55); camera.lookAt(0, -0.3, 0); camera.updateProjectionMatrix();
+    var boardHalf = Math.max(GRID_COLS, GRID_ROWS) * GRID_SPACING / 2 + GRID_SPACING * 0.7;
+    var aspect = window.innerWidth / window.innerHeight;
+    var halfH = boardHalf, halfV = boardHalf;
+    if (aspect < 1) halfV = boardHalf / aspect;
+    else halfH = boardHalf * aspect;
+    camera = new THREE.OrthographicCamera(-halfH, halfH, halfV, -halfV, 0.1, 50);
+    var dist = Math.max(halfH, halfV) * 1.5, h = dist * 0.65;
+    camera.position.set(dist * 0.45, h, dist * 0.6); camera.lookAt(0, -0.3, 0); camera.updateProjectionMatrix();
+}
+function onWindowResize() {
+    var boardHalf = Math.max(GRID_COLS, GRID_ROWS) * GRID_SPACING / 2 + GRID_SPACING * 0.7;
+    var aspect = window.innerWidth / window.innerHeight;
+    var halfH = boardHalf, halfV = boardHalf;
+    if (aspect < 1) halfV = boardHalf / aspect;
+    else halfH = boardHalf * aspect;
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    camera.left = -halfH; camera.right = halfH; camera.top = halfV; camera.bottom = -halfV; camera.updateProjectionMatrix();
 }
 
-function onWindowResize() {
-    var aspect = window.innerWidth / window.innerHeight, frustSize = Math.max(GRID_COLS, GRID_ROWS) * GRID_SPACING * 1.4, halfSize = frustSize / 2;
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    camera.left = -halfSize * aspect; camera.right = halfSize * aspect; camera.top = halfSize; camera.bottom = -halfSize; camera.updateProjectionMatrix();
-}
 
 function buildBoard() {
     boardGroup.clear(); var bw = GRID_COLS * GRID_SPACING, bh = GRID_ROWS * GRID_SPACING;
@@ -365,7 +375,7 @@ function onPointerDown(e) { if (gameState !== 'playing' || animationLock || inpu
 function onPointerMove(e) { if (gameState !== 'playing' || inputState.activePtrId !== e.pointerId) return; if (gameMode === 'battle' && Date.now() < battlePlayerFrozenUntil) return; var dx = e.clientX - inputState.sX, dy = e.clientY - inputState.sY, dist = Math.sqrt(dx * dx + dy * dy); if (dist < SWIPE_THRESHOLD && !inputState.isHolding) return; if (inputState.isHolding && inputState.curDie) { e.preventDefault(); inputState.hasMoved = true; var cell = getGridCellFromPointer(e.clientX, e.clientY); if (cell && (cell.gx !== inputState.lastGX || cell.gy !== inputState.lastGY)) { var gdx = cell.gx - inputState.lastGX, gdy = cell.gy - inputState.lastGY; var dir = null; if (gdx === 1 && gdy === 0) dir = 'east'; else if (gdx === -1 && gdy === 0) dir = 'west'; else if (gdx === 0 && gdy === 1) dir = 'south'; else if (gdx === 0 && gdy === -1) dir = 'north'; if (dir) { triggerSlide(inputState.curDie, dir); inputState.lastGX = cell.gx; inputState.lastGY = cell.gy; } } } else if (dist >= SWIPE_THRESHOLD) { if (inputState.holdTmr) { clearTimeout(inputState.holdTmr); inputState.holdTmr = null; } inputState.hasMoved = true; } }
 function onPointerUp(e) { if (inputState.activePtrId !== e.pointerId) return; if (inputState.holdTmr) { clearTimeout(inputState.holdTmr); inputState.holdTmr = null; } var dx = e.clientX - inputState.sX, dy = e.clientY - inputState.sY, dist = Math.sqrt(dx * dx + dy * dy), elapsed = Date.now() - inputState.sT; if (inputState.curDie) inputState.curDie.setHover(false); if (!inputState.isHolding && inputState.hasMoved && dist >= SWIPE_THRESHOLD && elapsed < HOLD_THRESHOLD) { if (gameMode !== 'battle' || Date.now() >= battlePlayerFrozenUntil) { var dir = getSwipeDirection(dx, dy); if (inputState.curDie && inputState.curDie.state === 'normal') triggerRoll(inputState.curDie, dir); } } hideGestureHint(); inputState.activePtrId = null; inputState.curDie = null; inputState.isHolding = false; inputState.hasMoved = false; }
 function raycastDie(cx, cy) { var rect = renderer.domElement.getBoundingClientRect(), mx = ((cx - rect.left) / rect.width) * 2 - 1, my = -((cy - rect.top) / rect.height) * 2 + 1; var rc = new THREE.Raycaster(); rc.setFromCamera(new THREE.Vector2(mx, my), camera); var hits = rc.intersectObjects(diceGroup.children, true); if (hits.length > 0) { var obj = hits[0].object; while (obj && !obj.userData.die) obj = obj.parent; if (obj && obj.userData.die) return obj.userData.die; } return null; }
-function getSwipeDirection(dx, dy) { var ang = Math.atan2(dy, dx), deg = ang * (180 / Math.PI); if (deg < 0) deg += 360; if (deg >= 0 && deg < 90) return 'east'; if (deg >= 90 && deg < 180) return 'south'; if (deg >= 180 && deg < 270) return 'west'; return 'north'; }
+function getSwipeDirection(dx, dy) { var ang = Math.atan2(dy, dx), deg = ang * (180 / Math.PI); if (deg < 0) deg += 360; if (deg >= 0 && deg < 90) return "east"; if (deg >= 90 && deg < 180) return "south"; if (deg >= 180 && deg < 270) return "west"; return "north"; }
 function getGridCellFromPointer(cx, cy) { var rect = renderer.domElement.getBoundingClientRect(), mx = ((cx - rect.left) / rect.width) * 2 - 1, my = -((cy - rect.top) / rect.height) * 2 + 1; var rc = new THREE.Raycaster(); rc.setFromCamera(new THREE.Vector2(mx, my), camera); var plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); var pt = new THREE.Vector3(); if (rc.ray.intersectPlane(plane, pt)) { var gx = Math.round(pt.x / GRID_SPACING + (GRID_COLS - 1) / 2), gy = Math.round(pt.z / GRID_SPACING + (GRID_ROWS - 1) / 2); if (gx >= 0 && gx < GRID_COLS && gy >= 0 && gy < GRID_ROWS) return { gx: gx, gy: gy }; } return null; }
 function triggerRoll(die, dir) { animationLock = true; var turn = gameMode === 'battle' ? 'player' : null; battleCurrentTurn = turn; die.roll(dir, function() { battleCurrentTurn = turn; evaluateRollChain(die); checkAllMatches(); animationLock = false; if (gameMode === 'puzzle') decrementPuzzleMove(); }); }
 function triggerSlide(die, dir) { animationLock = true; var turn = gameMode === 'battle' ? 'player' : null; battleCurrentTurn = turn; die.slide(dir, function() { battleCurrentTurn = turn; evaluateRollChain(die); checkAllMatches(); animationLock = false; if (gameMode === 'puzzle') decrementPuzzleMove(); }); }
@@ -405,27 +415,47 @@ function setupPuzzleStage() {
 function generatePuzzleLayout(stage) {
     var dice = [], placed = {};
     var cols = GRID_COLS, rows = GRID_ROWS;
-    function add(x, y, v) { var k = x + ',' + y; if (!placed[k] && x >= 0 && x < cols && y >= 0 && y < rows) { placed[k] = true; dice.push({ x: x, y: y, v: v }); } }
+    var minX = 1, maxX = cols - 2, minY = 1, maxY = rows - 2;
+    function add(x, y, v) { var k = x + ',' + y; if (!placed[k] && x >= minX && x <= maxX && y >= minY && y <= maxY) { placed[k] = true; dice.push({ x: x, y: y, v: v }); } }
     function randInt(n) { return Math.floor(Math.random() * n); }
     var numGroups = 2 + Math.floor(stage / 2);
     var groupSize = 3 + Math.floor(stage / 3);
-    var targetVals = stage <= 3 ? [3] : stage <= 6 ? [3, 4] : [3, 4, 5];
+    var targetVals = stage <= 3 ? [3, 4] : stage <= 6 ? [3, 4, 5] : [4, 5, 6];
     var extraOnes = stage <= 4 ? 1 : stage <= 7 ? 2 : 3;
     for (var g = 0; g < numGroups; g++) {
         var val = targetVals[randInt(targetVals.length)];
-        var sx = 1 + randInt(cols - 2 - groupSize);
-        var sy = 1 + randInt(rows - 2 - groupSize);
-        var dir = randInt(2);
-        for (var i = 0; i < groupSize; i++) {
-            var px = dir === 0 ? sx + i : sx, py = dir === 0 ? sy : sy + i;
-            if (px < cols - 1 && py < rows - 1) add(px, py, val);
-        }
-        if (stage >= 3 && randInt(3) === 0) {
-            add(sx + (dir === 0 ? randInt(groupSize) : 0), sy + (dir === 1 ? randInt(groupSize) : 0) + 1, val);
+        var sx = minX + randInt(maxX - minX - groupSize + 1);
+        var sy = minY + randInt(maxY - minY - groupSize + 1);
+        var pattern = randInt(5);
+        if (pattern === 0) {
+            for (var i = 0; i < groupSize; i++) add(sx + i, sy, val);
+            if (randInt(3) === 0 && sy < maxY) add(sx + randInt(groupSize), sy + 1, val);
+        } else if (pattern === 1) {
+            for (var i = 0; i < groupSize; i++) add(sx, sy + i, val);
+            if (randInt(3) === 0 && sx < maxX) add(sx + 1, sy + randInt(groupSize), val);
+        } else if (pattern === 2) {
+            var mid = Math.floor(groupSize / 2);
+            for (var i = 0; i < groupSize; i++) add(sx + i, sy + mid, val);
+            if (mid > 0 && sy + mid - 1 >= minY) add(sx + mid, sy + mid - 1, val);
+            if (sy + mid + 1 <= maxY) add(sx + mid, sy + mid + 1, val);
+        } else if (pattern === 3) {
+            for (var i = 0; i < groupSize; i++) {
+                add(sx + i, sy, val);
+                if (sy + 1 <= maxY && randInt(2) === 0) add(sx + i, sy + 1, val);
+            }
+        } else {
+            for (var i = 0; i < groupSize; i++) {
+                add(sx + (i % 2), sy + Math.floor(i / 2), val);
+            }
+            if (groupSize > 3 && randInt(2) === 0) add(sx + 2, sy + Math.floor(groupSize / 2), val);
         }
     }
     for (var o = 0; o < extraOnes; o++) {
-        add(1 + randInt(cols - 2), 1 + randInt(rows - 2), 1);
+        for (var attempts = 0; attempts < 20; attempts++) {
+            var ox = minX + randInt(maxX - minX + 1);
+            var oy = minY + randInt(maxY - minY + 1);
+            if (add(ox, oy, 1)) break;
+        }
     }
     return dice;
 }
