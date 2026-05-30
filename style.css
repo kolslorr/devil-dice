@@ -414,6 +414,24 @@ html, body {
     margin-top: 8px;
 }
 
+/* Battle mode: bottom bar, fixed position, left/center/right layout */
+.battle-layout {
+    position: fixed;
+    bottom: 20px;
+    left: 8px;
+    right: 8px;
+    margin-top: 0;
+    justify-content: space-between;
+    align-items: flex-end;
+    z-index: 10;
+    gap: 6px;
+}
+.battle-side { min-width: 120px; text-align: center; }
+.battle-center { min-width: 100px; text-align: center; }
+
+#hud-screen.hide-highscore #hud-highscore,
+#hud-screen.hide-highscore .hud-group:has(#hud-highscore) { display: none; }
+
 .mode-stat {
     text-align: center;
     min-width: 140px;
@@ -429,6 +447,18 @@ html, body {
     color: #ffcc00 !important;
     text-shadow: 0 0 8px rgba(255, 204, 0, 0.4) !important;
     font-size: 16px !important;
+}
+.battle-status.frozen {
+    color: #33ccff !important;
+    text-shadow: 0 0 8px rgba(51, 204, 255, 0.6) !important;
+    animation: freeze-pulse 0.5s ease-in-out infinite alternate;
+}
+@keyframes freeze-pulse { from { opacity: 1; } to { opacity: 0.4; } }
+
+.stat-row.winner strong {
+    color: #ffcc00 !important;
+    text-shadow: 0 0 12px rgba(255, 204, 0, 0.7);
+    font-size: 1.3em;
 }
 
 .attack-btn {
@@ -684,6 +714,14 @@ html, body {
         flex-direction: column;
         gap: 8px;
     }
+    .battle-layout {
+        flex-direction: row;
+        bottom: 12px;
+        left: 4px;
+        right: 4px;
+    }
+    .battle-side { min-width: 100px; }
+    .battle-center { min-width: 80px; }
 }
 
 @media (max-height: 500px) and (orientation: landscape) {

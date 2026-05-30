@@ -103,6 +103,14 @@
                             <option value="hard">Hard (Expert)</option>
                         </select>
                     </div>
+                    <div class="setting-row">
+                        <label for="battle-duration">Battle Timer:</label>
+                        <select id="battle-duration">
+                            <option value="60">1 Minute</option>
+                            <option value="120">2 Minutes</option>
+                            <option value="180" selected>3 Minutes</option>
+                        </select>
+                    </div>
                 </div>
                 <button id="close-settings" class="menu-btn">SAVE & CLOSE</button>
             </div>
@@ -138,12 +146,21 @@
                 </div>
             </div>
 
-            <div id="battle-hud" class="mode-hud" style="display:none;">
-                <div class="hud-group mode-stat">
-                    <div class="hud-label">AI BOARD</div>
+            <div id="battle-hud" class="mode-hud battle-layout" style="display:none;">
+                <div class="hud-group mode-stat battle-side">
+                    <div class="hud-label">YOU</div>
+                    <div id="battle-player-score" class="hud-value">0000000</div>
+                    <div id="battle-player-status" class="hud-value battle-status">ACTIVE</div>
+                </div>
+                <div class="hud-group mode-stat battle-center">
+                    <div class="hud-label">TIMER</div>
+                    <div id="battle-timer" class="hud-value">3:00</div>
+                </div>
+                <div class="hud-group mode-stat battle-side">
+                    <div class="hud-label">AI</div>
+                    <div id="battle-ai-score" class="hud-value">0000000</div>
                     <div id="battle-ai-status" class="hud-value battle-status">ACTIVE</div>
                 </div>
-
             </div>
 
             <!-- Combo Multiplier / Status Overlay -->
@@ -188,6 +205,16 @@
                     <div class="stat-row">
                         <span>Max Chain Combo:</span>
                         <strong id="go-combo">0</strong>
+                    </div>
+                    <div id="battle-go-stats" style="display:none;">
+                        <div class="stat-row" id="go-player-row">
+                            <span>Your Score:</span>
+                            <strong id="go-player-score">0</strong>
+                        </div>
+                        <div class="stat-row" id="go-ai-row">
+                            <span>AI Score:</span>
+                            <strong id="go-ai-score">0</strong>
+                        </div>
                     </div>
                     <div class="stat-row" id="new-high-indicator" style="display: none;">
                         <span class="highlight">NEW HIGH SCORE!</span>
