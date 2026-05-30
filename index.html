@@ -141,9 +141,15 @@
             <!-- Mode-specific HUD elements -->
             <div id="puzzle-hud" class="mode-hud" style="display:none;">
                 <div class="hud-group mode-stat">
+                    <div id="puzzle-stage" class="hud-label">STAGE 1/10</div>
                     <div class="hud-label">MOVES LEFT</div>
                     <div id="hud-moves" class="hud-value puzzle-moves">00</div>
                 </div>
+            </div>
+
+            <div id="battle-timer-box" class="hud-group battle-timer-top" style="display:none;">
+                <div class="hud-label">TIMER</div>
+                <div id="battle-timer" class="hud-value">3:00</div>
             </div>
 
             <div id="battle-hud" class="mode-hud battle-layout" style="display:none;">
@@ -151,10 +157,6 @@
                     <div class="hud-label">YOU</div>
                     <div id="battle-player-score" class="hud-value">0000000</div>
                     <div id="battle-player-status" class="hud-value battle-status">ACTIVE</div>
-                </div>
-                <div class="hud-group mode-stat battle-center">
-                    <div class="hud-label">TIMER</div>
-                    <div id="battle-timer" class="hud-value">3:00</div>
                 </div>
                 <div class="hud-group mode-stat battle-side">
                     <div class="hud-label">AI</div>
@@ -166,6 +168,11 @@
             <!-- Combo Multiplier / Status Overlay -->
             <div id="combo-display" class="combo-hide">
                 <span id="combo-count">2</span> CHAIN COMBO!
+            </div>
+
+            <!-- Stage Clear Banner -->
+            <div id="stage-clear-banner" class="stage-clear-hide">
+                <span id="stage-clear-text">STAGE CLEAR!</span>
             </div>
 
             <!-- Gesture Hint Overlay -->
@@ -226,11 +233,6 @@
                     <button id="menu-quit-btn" class="menu-btn">MAIN MENU</button>
                 </div>
             </div>
-        </div>
-
-        <!-- AI Battle Split Canvas Container -->
-        <div id="ai-canvas-container" style="display:none;">
-            <div id="ai-canvas-label">AI OPPONENT</div>
         </div>
     </div>
 

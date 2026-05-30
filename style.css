@@ -414,7 +414,19 @@ html, body {
     margin-top: 8px;
 }
 
-/* Battle mode: bottom bar, fixed position, left/center/right layout */
+/* Battle timer: top center */
+.battle-timer-top {
+    position: fixed;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    text-align: center;
+    z-index: 10;
+    min-width: 100px;
+    pointer-events: none;
+}
+
+/* Battle mode: bottom bar, fixed position, two columns */
 .battle-layout {
     position: fixed;
     bottom: 20px;
@@ -427,7 +439,6 @@ html, body {
     gap: 6px;
 }
 .battle-side { min-width: 120px; text-align: center; }
-.battle-center { min-width: 100px; text-align: center; }
 
 #hud-screen.hide-highscore #hud-highscore,
 #hud-screen.hide-highscore .hud-group:has(#hud-highscore) { display: none; }
@@ -492,6 +503,30 @@ html, body {
 .combo-hide {
     transform: translateX(-50%) scale(0.5) !important;
     opacity: 0;
+}
+
+/* Stage Clear Banner */
+#stage-clear-banner {
+    position: absolute;
+    top: 40%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.5);
+    background: rgba(0, 255, 102, 0.92);
+    color: #0c0810;
+    font-weight: bold;
+    font-size: 26px;
+    padding: 16px 32px;
+    border-radius: 12px;
+    box-shadow: 0 6px 25px rgba(0, 255, 102, 0.5);
+    pointer-events: none;
+    opacity: 0;
+    transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.3s ease;
+    z-index: 20;
+    letter-spacing: 2px;
+}
+#stage-clear-banner.active {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 1;
 }
 
 /* Gesture Hint Overlay */
@@ -721,7 +756,7 @@ html, body {
         right: 4px;
     }
     .battle-side { min-width: 100px; }
-    .battle-center { min-width: 80px; }
+    .battle-timer-top { top: 6px; min-width: 80px; }
 }
 
 @media (max-height: 500px) and (orientation: landscape) {
