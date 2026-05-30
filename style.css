@@ -437,8 +437,9 @@ html, body {
     align-items: flex-end;
     z-index: 10;
     gap: 6px;
+    pointer-events: none;
 }
-.battle-side { min-width: 120px; text-align: center; }
+.battle-side { min-width: 120px; text-align: center; pointer-events: auto; }
 
 #hud-screen.hide-highscore #hud-highscore,
 #hud-screen.hide-highscore .hud-group:has(#hud-highscore) { display: none; }
