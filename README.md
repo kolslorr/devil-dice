@@ -8,7 +8,7 @@ This game is built with pure, lightweight **HTML5, CSS3, and modern ECMAScript/T
 
 ## 🎮 Core Gameplay Mechanics
 
-You control a small devil running around a 7x7 grid covered in 3D dice.
+Clear dice on a 5x9 board before it fills up! Built for one-handed portrait play.
 
 1. **Walking & Running:**
    * **On Top of Dice:** Run quickly from die to die. Walk off the edge of any die to descend to the floor.

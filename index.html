@@ -19,16 +19,18 @@
         <div id="menu-screen" class="screen active">
             <div class="menu-content">
                 <h1 class="game-title">DEVIL DICE <span class="accent">3D</span></h1>
-                <p class="tagline">Roll, Match, and Chain in Isometric 3D</p>
+                <p class="tagline">Swipe, Roll, Match — Direct Gesture Puzzle</p>
                 
                 <div class="menu-sections">
-                    <button id="start-btn" class="menu-btn primary">START GAME</button>
+                    <button id="zen-btn" class="menu-btn primary">ZEN MODE</button>
+                    <button id="puzzle-btn" class="menu-btn">PUZZLE MODE</button>
+                    <button id="battle-btn" class="menu-btn">AI BATTLE</button>
                     <button id="how-to-btn" class="menu-btn">HOW TO PLAY</button>
-                    <button id="settings-btn" class="menu-btn">CONTROLS & SETTINGS</button>
+                    <button id="settings-btn" class="menu-btn">SETTINGS</button>
                 </div>
 
                 <div class="high-score-display">
-                    High Score: <span id="menu-highscore">0</span>
+                    Zen High Score: <span id="menu-highscore">0</span>
                 </div>
             </div>
         </div>
@@ -38,26 +40,26 @@
             <div class="modal-content">
                 <h2>HOW TO PLAY</h2>
                 <div class="modal-body">
-                    <p>You control a small devil on a grid filled with 3D dice. Clear dice before the board fills up!</p>
+                    <p>Directly interact with the dice grid using gestures — no character, just you and the dice.</p>
                     
                     <h3>Core Rules</h3>
                     <ul>
                         <li><strong>Match Dice:</strong> Connect a group of dice showing the same value on top. The number of dice in the group must be <strong>at least</strong> that value (e.g., at least <strong>3</strong> dice showing <strong>3</strong>, or <strong>5</strong> dice showing <strong>5</strong>).</li>
-                        <li><strong>Sinking:</strong> Matched dice begin slowly sinking into the floor. While they sink, they can still be used as a walkway.</li>
+                        <li><strong>Sinking:</strong> Matched dice begin slowly sinking into the floor. While they sink, they absorb matching dice rolled next to them.</li>
                         <li><strong>Chaining:</strong> Roll another die of the same value next to a sinking group to add it to the chain, restarting the sinking timer and getting huge point multipliers!</li>
-                        <li><strong>The Power of 1s:</strong> A die showing <strong>1</strong> on top cannot match on its own. However, if you roll a <strong>1</strong> next to <i>any</i> sinking group, it will immediately match and sink with them!</li>
+                        <li><strong>The Power of 1s:</strong> A die showing <strong>1</strong> on top cannot match on its own. However, if you roll a <strong>1</strong> next to any sinking group, it is instantly absorbed!</li>
                     </ul>
 
-                    <h3>Movement & Controls</h3>
+                    <h3>Gestures</h3>
                     <ul>
-                        <li><strong>On Top of Dice:</strong> Walk from die to die. Walk off the edge of a die to descend to the floor.</li>
-                        <li><strong>On the Floor:</strong> Walk against a die to <strong>push and slide</strong> it in that direction. Sliding does not change the top face value!</li>
-                        <li><strong>Climbing:</strong> Press the <strong>CLIMB</strong> button (or Spacebar) when facing a die to climb onto its top. Note: You can climb any die, but you cannot push a die if it's blocked.</li>
+                        <li><strong>Quick Swipe:</strong> Flick a die to <strong>Roll</strong> it into an adjacent empty tile (changes top face).</li>
+                        <li><strong>Hold &amp; Drag:</strong> Press and hold a die for a moment, then drag to <strong>Slide</strong> it (preserves top face, pushes other dice).</li>
                     </ul>
 
                     <h3>Desktop Controls</h3>
-                    <p><strong>Move/Roll:</strong> Arrow keys or WASD (diagonal alignment for isometric board)<br>
-                       <strong>Climb/Descend:</strong> Spacebar or Enter</p>
+                    <p><strong>Click &amp; Drag:</strong> Same as touch — click a die and release quickly to roll, or hold then drag to slide.<br>
+                       <strong>Arrow Keys:</strong> Arrow keys select a die and roll it in that direction.<br>
+                       <strong>P / Escape:</strong> Pause game.</p>
                 </div>
                 <button id="close-how-to" class="menu-btn">BACK</button>
             </div>
@@ -66,14 +68,15 @@
         <!-- Settings Modal -->
         <div id="settings-modal" class="modal">
             <div class="modal-content">
-                <h2>SETTINGS & CONTROLS</h2>
+                <h2>SETTINGS</h2>
                 <div class="modal-body">
                     <div class="setting-row">
-                        <label for="control-mode">Control Type:</label>
-                        <select id="control-mode">
-                            <option value="diagonal">Diagonal D-Pad (Recommended)</option>
-                            <option value="swipe">Swipe / Swipe-and-Hold</option>
-                            <option value="joystick">Virtual Joystick</option>
+                        <label for="board-size">Board Size:</label>
+                        <select id="board-size">
+                            <option value="7x7" selected>7×7 Classic (Square)</option>
+                            <option value="5x9">5×9 Portrait (Tall)</option>
+                            <option value="5x11">5×11 Portrait (Extra Tall)</option>
+                            <option value="9x5">9×5 Landscape (Wide)</option>
                         </select>
                     </div>
                     <div class="setting-row">
@@ -92,6 +95,14 @@
                             <option value="hard">Hard (Fast Pace)</option>
                         </select>
                     </div>
+                    <div class="setting-row">
+                        <label for="ai-difficulty">AI Difficulty:</label>
+                        <select id="ai-difficulty">
+                            <option value="easy">Easy (Slow)</option>
+                            <option value="medium" selected>Medium (Smart)</option>
+                            <option value="hard">Hard (Expert)</option>
+                        </select>
+                    </div>
                 </div>
                 <button id="close-settings" class="menu-btn">SAVE & CLOSE</button>
             </div>
@@ -101,20 +112,38 @@
         <div id="hud-screen" class="screen">
             <!-- Top Bar -->
             <div class="hud-top">
-                <div class="hud-group">
-                    <div class="hud-label">SCORE</div>
-                    <div id="hud-score" class="hud-value">000,000</div>
+                <div class="hud-left-group">
+                    <div class="hud-group">
+                        <div class="hud-label">SCORE</div>
+                        <div id="hud-score" class="hud-value">000,000</div>
+                    </div>
+                    <div class="hud-group">
+                        <div class="hud-label">HIGH SCORE</div>
+                        <div id="hud-highscore" class="hud-value">000,000</div>
+                    </div>
                 </div>
-                <div class="hud-group center">
+                <div class="hud-group center fullness-container">
                     <div id="capacity-warning" class="hud-label">BOARD FULLNESS</div>
                     <div class="capacity-bar-container">
                         <div id="capacity-bar" class="capacity-bar"></div>
                     </div>
                 </div>
-                <div class="hud-group right">
-                    <div class="hud-label">HIGH SCORE</div>
-                    <div id="hud-highscore" class="hud-value">000,000</div>
+            </div>
+
+            <!-- Mode-specific HUD elements -->
+            <div id="puzzle-hud" class="mode-hud" style="display:none;">
+                <div class="hud-group mode-stat">
+                    <div class="hud-label">MOVES LEFT</div>
+                    <div id="hud-moves" class="hud-value puzzle-moves">00</div>
                 </div>
+            </div>
+
+            <div id="battle-hud" class="mode-hud" style="display:none;">
+                <div class="hud-group mode-stat">
+                    <div class="hud-label">AI BOARD</div>
+                    <div id="battle-ai-status" class="hud-value battle-status">ACTIVE</div>
+                </div>
+
             </div>
 
             <!-- Combo Multiplier / Status Overlay -->
@@ -122,22 +151,14 @@
                 <span id="combo-count">2</span> CHAIN COMBO!
             </div>
 
-            <!-- Virtual Controls (Hidden on desktop if keys are used, but always active for touch) -->
-            <div id="touch-controls">
-                <!-- Isometric D-pad -->
-                <div class="dpad-container">
-                    <button id="dpad-ul" class="dpad-btn" data-dir="ul"><span>NW</span>↖</button>
-                    <button id="dpad-ur" class="dpad-btn" data-dir="ur"><span>NE</span>↗</button>
-                    <div class="dpad-center"></div>
-                    <button id="dpad-dl" class="dpad-btn" data-dir="dl"><span>SW</span>↙</button>
-                    <button id="dpad-dr" class="dpad-btn" data-dir="dr"><span>SE</span>↘</button>
-                </div>
+            <!-- Gesture Hint Overlay -->
+            <div id="gesture-hint" class="gesture-hide">
+                <span id="hint-text">Hold &amp; Drag</span>
+            </div>
 
-                <!-- Action Buttons -->
-                <div class="action-container">
-                    <button id="climb-btn" class="action-btn">CLIMB / ACTION</button>
-                    <button id="pause-btn" class="action-btn secondary">PAUSE</button>
-                </div>
+            <!-- Bottom Controls (minimal) -->
+            <div id="touch-controls">
+                <button id="pause-btn" class="action-btn secondary">PAUSE</button>
             </div>
         </div>
 
@@ -156,7 +177,7 @@
         <!-- Game Over Screen -->
         <div id="gameover-screen" class="screen">
             <div class="gameover-content">
-                <h2 class="gameover-title">BOARD FILLED!</h2>
+                <h2 id="gameover-title-text" class="gameover-title">BOARD FILLED!</h2>
                 <p>GAME OVER</p>
                 
                 <div class="gameover-stats">
@@ -178,6 +199,11 @@
                     <button id="menu-quit-btn" class="menu-btn">MAIN MENU</button>
                 </div>
             </div>
+        </div>
+
+        <!-- AI Battle Split Canvas Container -->
+        <div id="ai-canvas-container" style="display:none;">
+            <div id="ai-canvas-label">AI OPPONENT</div>
         </div>
     </div>
 

@@ -6,7 +6,7 @@
     user-select: none;
     -webkit-user-select: none;
     -webkit-touch-callout: none;
-    font-family: 'Courier New', Courier, monospace, monospace;
+    font-family: 'Courier New', Courier, monospace;
 }
 
 html, body {
@@ -15,7 +15,8 @@ html, body {
     overflow: hidden;
     background-color: #0c0810;
     color: #f0f0f5;
-    position: fixed; /* Prevents bounce scrolling on iOS */
+    position: fixed;
+    touch-action: none; /* Prevent browser gestures on the game surface */
 }
 
 /* Containers */
@@ -26,6 +27,7 @@ html, body {
     top: 0;
     left: 0;
     z-index: 1;
+    touch-action: none;
 }
 
 #ui-container {
@@ -35,7 +37,33 @@ html, body {
     top: 0;
     left: 0;
     z-index: 10;
-    pointer-events: none; /* Let clicks pass through to 3D canvas if needed, though screens will re-enable pointer-events */
+    pointer-events: none;
+}
+
+/* AI Battle Split Canvas */
+#ai-canvas-container {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 40%;
+    z-index: 2;
+    pointer-events: none;
+}
+
+#ai-canvas-label {
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(255, 51, 102, 0.85);
+    color: white;
+    padding: 4px 16px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: bold;
+    letter-spacing: 1px;
+    text-transform: uppercase;
 }
 
 /* Screen States */
@@ -130,7 +158,7 @@ html, body {
     font-size: 10px;
 }
 
-/* Typography & Aesthetic Components */
+/* Typography */
 .accent {
     color: #ff3366;
     text-shadow: 0 0 10px rgba(255, 51, 102, 0.8);
@@ -167,7 +195,7 @@ html, body {
 .tagline {
     font-size: 14px;
     color: #8a829e;
-    margin-bottom: 40px;
+    margin-bottom: 32px;
     text-transform: uppercase;
     letter-spacing: 1px;
 }
@@ -175,9 +203,9 @@ html, body {
 .menu-sections {
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 12px;
     width: 280px;
-    margin: 0 auto 40px auto;
+    margin: 0 auto 32px auto;
 }
 
 .menu-btn {
@@ -192,6 +220,7 @@ html, body {
     cursor: pointer;
     transition: all 0.2s ease;
     text-transform: uppercase;
+    touch-action: manipulation;
 }
 
 .menu-btn:active, .menu-btn:hover {
@@ -291,13 +320,28 @@ html, body {
     padding-bottom: calc(16px + env(safe-area-inset-bottom));
     padding-left: calc(16px + env(safe-area-inset-left));
     padding-right: calc(16px + env(safe-area-inset-right));
+    pointer-events: none !important;
 }
 
 .hud-top {
     display: flex;
     justify-content: space-between;
-    align-items: center;
+    align-items: flex-start;
     pointer-events: auto;
+    width: 100%;
+}
+
+.hud-left-group {
+    display: flex;
+    flex-direction: row;
+    gap: 12px;
+}
+
+.fullness-container {
+    flex-grow: 0 !important;
+    width: 180px !important;
+    max-width: 180px !important;
+    margin: 0 !important;
 }
 
 .hud-group {
@@ -317,10 +361,6 @@ html, body {
     display: flex;
     flex-direction: column;
     align-items: center;
-}
-
-.hud-group.right {
-    text-align: right;
 }
 
 .hud-label {
@@ -361,9 +401,43 @@ html, body {
     transition: width 0.3s ease;
 }
 
-/* Board Fullness Pulsing Alarm */
 .danger-alarm {
     animation: alarmFlash 1s infinite alternate;
+}
+
+/* Mode-specific HUD elements */
+.mode-hud {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    pointer-events: auto;
+    margin-top: 8px;
+}
+
+.mode-stat {
+    text-align: center;
+    min-width: 140px;
+}
+
+.puzzle-moves {
+    color: #33ccff !important;
+    text-shadow: 0 0 8px rgba(51, 204, 255, 0.4) !important;
+    font-size: 28px !important;
+}
+
+.battle-status {
+    color: #ffcc00 !important;
+    text-shadow: 0 0 8px rgba(255, 204, 0, 0.4) !important;
+    font-size: 16px !important;
+}
+
+.attack-btn {
+    width: auto !important;
+    padding: 8px 16px !important;
+    font-size: 11px !important;
+    margin-left: 12px;
+    background: #ff3366 !important;
+    border-color: #ff3366 !important;
 }
 
 /* Combo Overlay Display */
@@ -390,108 +464,42 @@ html, body {
     opacity: 0;
 }
 
-/* Touch Controls Panel (Bottom Area) */
+/* Gesture Hint Overlay */
+#gesture-hint {
+    position: absolute;
+    bottom: 100px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(51, 204, 255, 0.85);
+    color: #0c0810;
+    font-weight: bold;
+    font-size: 14px;
+    padding: 6px 16px;
+    border-radius: 16px;
+    pointer-events: none;
+    transition: transform 0.2s ease, opacity 0.2s ease;
+    z-index: 15;
+}
+
+.gesture-hide {
+    transform: translateX(-50%) scale(0.8) !important;
+    opacity: 0;
+}
+
+/* Touch Controls Panel (Bottom Area - simplified) */
 #touch-controls {
     display: flex;
-    justify-content: space-between;
-    align-items: flex-end;
-    pointer-events: auto; /* Allow clicks on buttons */
-    margin-top: auto;
-}
-
-/* Isometric D-pad */
-.dpad-container {
-    position: relative;
-    width: 170px;
-    height: 170px;
-    background: rgba(12, 8, 16, 0.6);
-    border: 3px solid rgba(93, 79, 124, 0.5);
-    border-radius: 50%;
-    backdrop-filter: blur(4px);
-    -webkit-backdrop-filter: blur(4px);
-}
-
-.dpad-btn {
-    position: absolute;
-    width: 54px;
-    height: 54px;
-    background: #1e152d;
-    border: 2px solid #ff3366;
-    border-radius: 12px;
-    color: white;
-    font-size: 20px;
-    font-weight: bold;
-    display: flex;
-    flex-direction: column;
     justify-content: center;
-    align-items: center;
-    cursor: pointer;
-    box-shadow: 0 4px 8px rgba(0,0,0,0.4);
-    touch-action: manipulation;
-    transition: all 0.1s ease;
-}
-
-.dpad-btn span {
-    font-size: 8px;
-    color: rgba(255,255,255,0.4);
-    margin-bottom: 2px;
-}
-
-.dpad-btn:active {
-    background: #ff3366;
-    border-color: #ff3366;
-    box-shadow: 0 0 15px #ff3366;
-    transform: scale(0.92);
-}
-
-/* Positions for Isometric D-pad buttons */
-#dpad-ul {
-    top: 6px;
-    left: 50%;
-    transform: translateX(-50%);
-}
-
-#dpad-ur {
-    top: 50%;
-    right: 6px;
-    transform: translateY(-50%);
-}
-
-#dpad-dl {
-    top: 50%;
-    left: 6px;
-    transform: translateY(-50%);
-}
-
-#dpad-dr {
-    bottom: 6px;
-    left: 50%;
-    transform: translateX(-50%);
-}
-
-.dpad-center {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: 44px;
-    height: 44px;
-    background: rgba(93, 79, 124, 0.2);
-    border-radius: 50%;
-}
-
-/* Action Button Panel */
-.action-container {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-    width: 160px;
+    align-items: flex-end;
+    pointer-events: auto;
+    margin-top: auto;
+    padding-bottom: 8px;
 }
 
 .action-btn {
-    width: 100%;
-    padding: 16px;
-    font-size: 14px;
+    width: 120px;
+    padding: 12px;
+    font-size: 12px;
     font-weight: bold;
     color: #ffffff;
     background: #ff3366;
@@ -514,8 +522,9 @@ html, body {
     background: #181223;
     border-color: #5d4f7c;
     box-shadow: 0 4px 10px rgba(0,0,0,0.3);
-    padding: 12px;
-    font-size: 12px;
+    padding: 8px 16px;
+    font-size: 11px;
+    width: auto;
 }
 
 .action-btn.secondary:active {
@@ -524,12 +533,16 @@ html, body {
     box-shadow: 0 0 10px rgba(140, 123, 168, 0.3);
 }
 
-/* Sinking active status indicator style on action button if toggled */
-.action-btn.active {
-    background: #ffcc00 !important;
-    border-color: #ffcc00 !important;
-    color: #0c0810 !important;
-    box-shadow: 0 0 15px rgba(255, 204, 0, 0.6) !important;
+/* Floating Score Indicators */
+.floating-score {
+    position: absolute;
+    pointer-events: none;
+    font-weight: bold;
+    font-size: 18px;
+    color: #ffcc00;
+    text-shadow: 0 0 10px rgba(255, 204, 0, 0.6);
+    z-index: 30;
+    white-space: nowrap;
 }
 
 /* Pause Screen */
@@ -639,30 +652,10 @@ html, body {
     100% { text-shadow: 0 0 25px rgba(255,255,255,0.3), 0 0 40px rgba(255, 33, 102, 0.8); }
 }
 
-/* Portrait and landscape responsiveness */
+/* Responsive adjustments */
 @media (max-width: 600px) {
     .game-title {
         font-size: 36px;
-    }
-    
-    .dpad-container {
-        width: 140px;
-        height: 140px;
-    }
-    
-    .dpad-btn {
-        width: 46px;
-        height: 46px;
-        font-size: 16px;
-    }
-    
-    .action-container {
-        width: 130px;
-    }
-    
-    .action-btn {
-        padding: 12px;
-        font-size: 12px;
     }
     
     .hud-group {
@@ -677,6 +670,20 @@ html, body {
     .hud-group.center {
         margin: 0 8px;
     }
+
+    .hud-left-group {
+        gap: 6px;
+    }
+
+    .fullness-container {
+        width: 120px !important;
+        max-width: 120px !important;
+    }
+
+    .mode-hud {
+        flex-direction: column;
+        gap: 8px;
+    }
 }
 
 @media (max-height: 500px) and (orientation: landscape) {
@@ -686,48 +693,27 @@ html, body {
     
     .menu-sections {
         flex-direction: row;
+        flex-wrap: wrap;
         width: 100%;
         max-width: 500px;
+        gap: 8px;
+    }
+
+    .menu-sections .menu-btn {
+        width: auto;
+        flex: 1;
+        min-width: 100px;
+        font-size: 13px;
+        padding: 10px 14px;
     }
     
     #touch-controls {
         position: absolute;
         bottom: 10px;
-        left: 10px;
         right: 10px;
-        pointer-events: none;
-    }
-    
-    .dpad-container {
-        width: 110px;
-        height: 110px;
-        pointer-events: auto;
-    }
-    
-    .dpad-btn {
-        width: 36px;
-        height: 36px;
-        font-size: 12px;
-        border-radius: 6px;
-    }
-    
-    .dpad-btn span {
-        display: none;
-    }
-    
-    .action-container {
-        width: 110px;
-        gap: 6px;
-        pointer-events: auto;
-    }
-    
-    .action-btn {
-        padding: 8px;
-        font-size: 10px;
-        border-radius: 6px;
     }
     
     .tagline {
-        margin-bottom: 10px;
+        margin-bottom: 12px;
     }
 }
