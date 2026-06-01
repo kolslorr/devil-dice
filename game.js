@@ -537,7 +537,7 @@ function updateSinkingHighlights() { for (var x = 0; x < GRID_COLS; x++) for (va
 window.onload = function() { document.getElementById('menu-highscore').innerText = Number(highScore).toLocaleString(); initEngine(); setupControlListeners(); gameLoop(); };
 
 // ── Automation Hooks (for headless playtester) ──
-Object.defineProperty(window, 'gameState', { get: function() {
+Object.defineProperty(window, 'autoGameState', { get: function() {
     var matrix = [];
     for (var x = 0; x < GRID_COLS; x++) {
         matrix[x] = [];

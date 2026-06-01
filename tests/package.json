@@ -1,0 +1,10 @@
+{
+  "name": "devil-dice-playtester",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "puppeteer": "^23.0.0",
+    "pixelmatch": "^6.0.0",
+    "canvas": "^3.0.0"
+  }
+}
