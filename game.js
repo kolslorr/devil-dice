@@ -199,7 +199,7 @@ Die.prototype.setHover = function(active) {
 };
 Die.prototype._syncPivot = function() {
     var wx = (this.gridX - (GRID_COLS - 1) / 2) * GRID_SPACING, wz = (this.gridY - (GRID_ROWS - 1) / 2) * GRID_SPACING;
-    var wy = (this.height - 0.5) + DIE_SCALE / 2;
+    var wy = this.height + DIE_SCALE / 2;
     this.pivotGroup.position.set(wx, wy, wz); this.pivotGroup.rotation.set(0, 0, 0); this.mesh.position.set(0, 0, 0);
 };
 Die.prototype.updateMeshPosition = function() { this._syncPivot(); };
@@ -215,7 +215,8 @@ Die.prototype.animateRise = function() {
     requestAnimationFrame(tick);
 };
 Die.prototype.roll = function(direction, onComplete) {
-    if (this.state !== 'normal' && this.state !== 'locked') return; if (this.cellType === CELL_TYPE.LOCKED) return;
+    if (this.state !== 'normal' && this.state !== 'locked') { if (onComplete) onComplete(); return; }
+    if (this.cellType === CELL_TYPE.LOCKED) { if (onComplete) onComplete(); return; }
     this.state = 'rolling'; var sx = this.gridX, sy = this.gridY, d = DIRECTIONS[direction], ex = sx + d.dx, ey = sy + d.dy;
     if (ex < 0 || ex >= GRID_COLS || ey < 0 || ey >= GRID_ROWS) { this.state = 'normal'; if (onComplete) onComplete(); return; }
     if (grid[ex][ey] !== null) { this.state = 'normal'; AudioEngine.playMove(); if (onComplete) onComplete(); return; }
@@ -242,7 +243,8 @@ Die.prototype.roll = function(direction, onComplete) {
     requestAnimationFrame(tick);
 };
 Die.prototype.slide = function(direction, onComplete) {
-    if (this.state !== 'normal') return; if (this.cellType === CELL_TYPE.LOCKED) return;
+    if (this.state !== 'normal') { if (onComplete) onComplete(); return; }
+    if (this.cellType === CELL_TYPE.LOCKED) { if (onComplete) onComplete(); return; }
     var d = DIRECTIONS[direction], tx = this.gridX + d.dx, ty = this.gridY + d.dy;
     if (tx < 0 || tx >= GRID_COLS || ty < 0 || ty >= GRID_ROWS) { if (onComplete) onComplete(); return; }
     if (grid[tx][ty] !== null) { AudioEngine.playMove(); if (onComplete) onComplete(); return; }
