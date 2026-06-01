@@ -282,6 +282,14 @@ def run_cycle(feature_request=None, mode="cycle"):
     critic_report = critic_analyze(playtest_result)
     print(critic_report[:500] + "..." if len(critic_report) > 500 else critic_report)
 
+    # Report zen effects status
+    if playtest_result.get("zenEffectsVerified"):
+        print(f"\n  🎆 ZEN EFFECTS: Verified ✓")
+        print(f"    - Ambient particles: {'Active' if playtest_result.get('zenAmbientParticles') else 'Missing'}")
+        print(f"    - Active bursts:    {playtest_result.get('zenBurstsSpawned', 0)}")
+    else:
+        print(f"\n  ⚠️ ZEN EFFECTS: NOT VERIFIED")
+
     # Save critic report
     report_path = TEST_OUTPUT / f"critic_report_{int(time.time())}.md"
     report_path.write_text(critic_report)

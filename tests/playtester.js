@@ -39,6 +39,9 @@ const RESULTS = {
   movesCompleted: 0,
   matchesFound: 0,
   testId: TEST_ID,
+  zenEffectsVerified: false,
+  zenAmbientParticles: false,
+  zenBurstsSpawned: 0,
 };
 
 // ── Utility: random int in range ──
@@ -49,7 +52,7 @@ async function runPlaytest() {
   const browser = await puppeteer.launch({
     headless: 'new',
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu',
-           '--use-gl=swiftshader', '--disable-web-security',
+           '--use-gl=angle', '--use-angle=swiftshader', '--disable-web-security',
            '--autoplay-policy=no-user-gesture-required',
            '--disable-features=AudioServiceOutOfProcess'],
   });
@@ -210,6 +213,30 @@ async function runPlaytest() {
   await page.screenshot({ path: finalScreenshot, fullPage: false });
   RESULTS.screenshot = finalScreenshot;
 
+  // ── Verify Zen background effects ──
+  try {
+    const zenState = await page.evaluate(() => {
+      var ambientExists = typeof zenAmbientParticles !== 'undefined' && zenAmbientParticles !== null;
+      var burstCount = typeof zenFireworkBursts !== 'undefined' ? zenFireworkBursts.length : 0;
+      return { ambientExists, burstCount };
+    });
+    RESULTS.zenAmbientParticles = zenState.ambientExists;
+    RESULTS.zenBurstsSpawned = zenState.burstCount;
+    RESULTS.zenEffectsVerified = zenState.ambientExists;
+    if (!zenState.ambientExists) {
+      RESULTS.warnings.push('Zen ambient particles not found — background effects may not be initialized');
+    }
+    if (zenState.ambientExists && zenState.burstCount === 0) {
+      // Force-spawn a burst and capture a screenshot for visual verification
+      await page.evaluate(() => { if (typeof spawnZenBurst !== 'undefined') { spawnZenBurst(0, 0.5, 0, 0xff3366); spawnZenBurst(-2, 1.5, 0, 0x33ccff); } });
+      await sleep(100);
+      const effectsScreenshot = `test_output/${TEST_ID}_effects.png`;
+      await page.screenshot({ path: effectsScreenshot, fullPage: false });
+    }
+  } catch (err) {
+    RESULTS.warnings.push('Zen effects check failed: ' + err.message);
+  }
+
   await browser.close();
 
   // ── Compute averages ──
@@ -274,7 +301,8 @@ async function runPlaytest() {
   const hasFpsIssues = RESULTS.fpsMin < 45 && RESULTS.fpsMin > 0;
   const hasVisualDrift = RESULTS.diffPct !== null && RESULTS.diffPct > 5.0;
 
-  RESULTS.passed = !hasCriticalErrors && !hasFpsIssues && !hasVisualDrift;
+  const hasZenEffectsFailed = ARGS.golden && !RESULTS.zenEffectsVerified;
+  RESULTS.passed = !hasCriticalErrors && !hasFpsIssues && !hasVisualDrift && !hasZenEffectsFailed;
 
   return RESULTS;
 }

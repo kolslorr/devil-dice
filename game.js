@@ -61,7 +61,7 @@ var textureCache = {}, materialsCache = {};
 // ── Zen mode background effects ──
 var zenAmbientParticles = null, zenFireworkBursts = [], zenFireworkTimerId = null;
 var ZEN_FIREWORK_COLORS = [0xff3366, 0x33ccff, 0x66ff33, 0xffcc00, 0xcc66ff, 0xff8844, 0x44ffaa, 0xff66aa];
-var ZEN_AMBIENT_COUNT = 80, zenAmbientPhase = 0;
+var ZEN_AMBIENT_COUNT = 120, zenAmbientPhase = 0;
 
 var AudioEngine = {
     init: function() { if (audioCtx) return; try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) {} },
@@ -431,8 +431,8 @@ function initZenEffects() {
     var colors = new Float32Array(ZEN_AMBIENT_COUNT * 3);
     for (var i = 0; i < ZEN_AMBIENT_COUNT; i++) {
         positions[i*3] = (Math.random() - 0.5) * 24;
-        positions[i*3+1] = (Math.random() - 0.5) * 18;
-        positions[i*3+2] = -2 - Math.random() * 5;
+        positions[i*3+1] = (Math.random() - 0.3) * 16;
+        positions[i*3+2] = -1 - Math.random() * 3;
         sizes[i] = 0.03 + Math.random() * 0.08;
         var c = new THREE.Color(ZEN_FIREWORK_COLORS[Math.floor(Math.random() * ZEN_FIREWORK_COLORS.length)]);
         colors[i*3] = c.r; colors[i*3+1] = c.g; colors[i*3+2] = c.b;
@@ -441,8 +441,8 @@ function initZenEffects() {
     geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     var mat = new THREE.PointsMaterial({
-        size: 0.06, vertexColors: true, transparent: true, opacity: 0.35,
-        blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true
+        size: 0.15, vertexColors: true, transparent: true, opacity: 0.55,
+        blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, sizeAttenuation: true
     });
     zenAmbientParticles = new THREE.Points(geom, mat);
     worldGroup.add(zenAmbientParticles);
@@ -478,7 +478,7 @@ function spawnZenBurst(posX, posY, posZ, forceColor) {
     if (gameMode !== 'zen' || !worldGroup) return;
     var bx = (typeof posX !== 'undefined') ? posX : (Math.random() - 0.5) * 14;
     var by = (typeof posY !== 'undefined') ? posY : (Math.random() - 0.5) * 8;
-    var bz = (typeof posZ !== 'undefined') ? posZ : -2 - Math.random() * 3;
+    var bz = (typeof posZ !== 'undefined') ? posZ : -0.5 - Math.random() * 1;
     var count = 25 + Math.floor(Math.random() * 20);
     var color = forceColor || ZEN_FIREWORK_COLORS[Math.floor(Math.random() * ZEN_FIREWORK_COLORS.length)];
     var positions = new Float32Array(count * 3);
@@ -503,8 +503,8 @@ function spawnZenBurst(posX, posY, posZ, forceColor) {
     geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     var mat = new THREE.PointsMaterial({
-        size: 0.1, vertexColors: true, transparent: true, opacity: 0.9,
-        blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true
+        size: 0.4, vertexColors: true, transparent: true, opacity: 0.9,
+        blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, sizeAttenuation: true
     });
     var mesh = new THREE.Points(geom, mat);
     mesh.userData.velocities = velocities;
@@ -543,8 +543,8 @@ function updateZenEffects() {
                 // Wrap to bottom when reaching top
                 if (pos.array[i*3+1] > 10) {
                     pos.array[i*3] = (Math.random() - 0.5) * 24;
-                    pos.array[i*3+1] = -10;
-                    pos.array[i*3+2] = -2 - Math.random() * 5;
+                    pos.array[i*3+1] = -6;
+                    pos.array[i*3+2] = -1 - Math.random() * 3;
                 }
             }
             pos.needsUpdate = true;
