@@ -1,0 +1,8 @@
+node_modules/
+*.bak
+test_output/
+golden/
+issues/
+.DS_Store
+__pycache__/
+*.pyc

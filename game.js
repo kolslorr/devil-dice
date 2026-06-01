@@ -530,7 +530,37 @@ function hideComboBanner() { document.getElementById('combo-display').classList.
 
 function setupControlListeners() { window.addEventListener('keydown', handleKeyboard); setupPointerEvents(); document.getElementById('zen-btn').addEventListener('click', function() { startGame('zen'); }); document.getElementById('puzzle-btn').addEventListener('click', function() { startGame('puzzle'); }); document.getElementById('battle-btn').addEventListener('click', function() { startGame('battle'); }); document.getElementById('how-to-btn').addEventListener('click', function() { document.getElementById('how-to-modal').classList.add('active'); }); document.getElementById('close-how-to').addEventListener('click', function() { document.getElementById('how-to-modal').classList.remove('active'); }); document.getElementById('settings-btn').addEventListener('click', function() { document.getElementById('board-size').value = boardSize; document.getElementById('sound-toggle').checked = soundEnabled; document.getElementById('music-toggle').checked = musicEnabled; document.getElementById('difficulty').value = selectedDifficulty; document.getElementById('ai-difficulty').value = aiDifficulty; document.getElementById('battle-duration').value = battleDuration; document.getElementById('settings-modal').classList.add('active'); }); document.getElementById('close-settings').addEventListener('click', function() { soundEnabled = document.getElementById('sound-toggle').checked; var mc = document.getElementById('music-toggle').checked; if (mc !== musicEnabled) { musicEnabled = mc; if (gameState === 'playing') { if (musicEnabled) AudioEngine.startBGM(); else AudioEngine.stopBGM(); } } selectedDifficulty = document.getElementById('difficulty').value; aiDifficulty = document.getElementById('ai-difficulty').value; battleDuration = parseInt(document.getElementById('battle-duration').value); var newBoardSize = document.getElementById('board-size').value; if (newBoardSize !== boardSize) { stopSpawning(); clearAllDice(); setBoardSize(newBoardSize); if (gameState === 'playing') startGame(gameMode); else quitToMenu(); } document.getElementById('settings-modal').classList.remove('active'); }); document.getElementById('pause-btn').addEventListener('click', pauseGame); document.getElementById('resume-btn').addEventListener('click', resumeGame); document.getElementById('restart-pause-btn').addEventListener('click', function() { startGame(gameMode); }); document.getElementById('quit-btn').addEventListener('click', quitToMenu); document.getElementById('retry-btn').addEventListener('click', function() { startGame(gameMode); }); document.getElementById('menu-quit-btn').addEventListener('click', quitToMenu); }
 
-function gameLoop() { requestAnimationFrame(gameLoop); if (renderer && scene && camera) renderer.render(scene, camera); if (gameState === 'playing') { updateSinkingDice(); updateSinkingHighlights(); var activeCount = countActiveDice(); updateFullnessBar(activeCount / totalCells); if (gameMode !== 'battle' && activeCount >= totalCells) triggerGameOver(); if (gameMode === 'battle') updateFreezeDisplay(); } }
+var _frameCount = 0, _lastFpsTime = performance.now(), _currentFPS = 60;
+function gameLoop() { requestAnimationFrame(gameLoop); _frameCount++; var now = performance.now(); if (now - _lastFpsTime >= 1000) { _currentFPS = Math.round(_frameCount * 1000 / (now - _lastFpsTime)); _frameCount = 0; _lastFpsTime = now; } if (renderer && scene && camera) renderer.render(scene, camera); if (gameState === 'playing') { updateSinkingDice(); updateSinkingHighlights(); var activeCount = countActiveDice(); updateFullnessBar(activeCount / totalCells); if (gameMode !== 'battle' && activeCount >= totalCells) triggerGameOver(); if (gameMode === 'battle') updateFreezeDisplay(); } }
 function updateSinkingHighlights() { for (var x = 0; x < GRID_COLS; x++) for (var y = 0; y < GRID_ROWS; y++) { var hl = sinkingHighlights[x] && sinkingHighlights[x][y]; if (hl) { var die = grid[x] && grid[x][y]; hl.visible = !!(die && die.state === 'sinking'); } } }
 
 window.onload = function() { document.getElementById('menu-highscore').innerText = Number(highScore).toLocaleString(); initEngine(); setupControlListeners(); gameLoop(); };
+
+// ── Automation Hooks (for headless playtester) ──
+Object.defineProperty(window, 'gameState', { get: function() {
+    var matrix = [];
+    for (var x = 0; x < GRID_COLS; x++) {
+        matrix[x] = [];
+        for (var y = 0; y < GRID_ROWS; y++) {
+            var d = grid[x][y];
+            matrix[x][y] = d ? {
+                top: d.faces.top,
+                state: d.state,
+                type: d.cellType,
+                height: d.height
+            } : null;
+        }
+    }
+    return {
+        cols: GRID_COLS,
+        rows: GRID_ROWS,
+        matrix: matrix,
+        score: score,
+        comboCount: comboCount,
+        gameMode: gameMode,
+        gameState: gameState,
+        activeSinkingGroups: activeSinkingGroups.length,
+        animationLock: animationLock
+    };
+} });
+Object.defineProperty(window, 'currentFPS', { get: function() { return _currentFPS; } });
