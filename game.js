@@ -58,6 +58,10 @@ var battleCurrentTurn = null;
 var battlePlayerFrozenUntil = 0, battleAiFrozenUntil = 0;
 var audioCtx = null, bgmGain = null, bgmIntervalId = null, menuMusicIntervalId = null;
 var textureCache = {}, materialsCache = {};
+// ── Zen mode background effects ──
+var zenAmbientParticles = null, zenFireworkBursts = [], zenFireworkTimerId = null;
+var ZEN_FIREWORK_COLORS = [0xff3366, 0x33ccff, 0x66ff33, 0xffcc00, 0xcc66ff, 0xff8844, 0x44ffaa, 0xff66aa];
+var ZEN_AMBIENT_COUNT = 80, zenAmbientPhase = 0;
 
 var AudioEngine = {
     init: function() { if (audioCtx) return; try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) {} },
@@ -369,14 +373,14 @@ function checkAllMatches() {
         if (component.length >= targetVal) { matchedAny = true; var groupId = Date.now() + Math.random().toString(36).substr(2, 5);
             component.forEach(function(d) { d.startSinking(groupId); });
             activeSinkingGroups.push({ id: groupId, diceValue: targetVal, diceList: component, lastActivity: Date.now() });
-            var points = targetVal * component.length * 100; battleAwardScore(points); AudioEngine.playMatch();
+            var points = targetVal * component.length * 100; battleAwardScore(points); AudioEngine.playMatch(); var midDie = component[Math.floor(component.length/2)], mwx = (midDie.gridX - (GRID_COLS - 1) / 2) * GRID_SPACING, mwz = (midDie.gridY - (GRID_ROWS - 1) / 2) * GRID_SPACING; spawnZenBurst(mwx, 0.2, mwz, ZEN_FIREWORK_COLORS[targetVal % ZEN_FIREWORK_COLORS.length]);
             createFloatingScore(component[0].gridX, component[0].gridY, '+' + points); triggerChainEvaluations(groupId, targetVal); } }
     checkOnesChaining();
 }
 
 function evaluateRollChain(rolledDie) { if (rolledDie.state !== 'normal') return; var rx = rolledDie.gridX, ry = rolledDie.gridY, rv = rolledDie.faces.top; var neighbors = [[rx + 1, ry], [rx - 1, ry], [rx, ry + 1], [rx, ry - 1]]; for (var ni = 0; ni < neighbors.length; ni++) { var nx = neighbors[ni][0], ny = neighbors[ni][1]; if (nx >= 0 && nx < GRID_COLS && ny >= 0 && ny < GRID_ROWS) { var nd = grid[nx][ny]; if (nd && nd.state === 'sinking') { var group = activeSinkingGroups.find(function(g) { return g.id === nd.sinkingGroup; }); if (group) { if (rv === group.diceValue && rv !== 1) { addDieToSinkingGroup(rolledDie, group); return; } else if (rv === 1) { addDieToSinkingGroup(rolledDie, group); return; } } } } } }
 
-function addDieToSinkingGroup(die, group) { die.startSinking(group.id); group.diceList.push(die); group.lastActivity = Date.now(); group.diceList.forEach(function(d) { d.sinkingTimer = Date.now(); }); comboCount++; showComboBanner(); var comboPoints = comboCount * 250; battleAwardScore(comboPoints); battleFreezeOpponent(comboCount, group.diceValue); AudioEngine.playCombo(comboCount); createFloatingScore(die.gridX, die.gridY, 'COMBO +' + comboPoints); checkOnesChaining(); }
+function addDieToSinkingGroup(die, group) { die.startSinking(group.id); group.diceList.push(die); group.lastActivity = Date.now(); group.diceList.forEach(function(d) { d.sinkingTimer = Date.now(); }); comboCount++; showComboBanner(); var comboPoints = comboCount * 250; battleAwardScore(comboPoints); battleFreezeOpponent(comboCount, group.diceValue); AudioEngine.playCombo(comboCount); var cwx = (die.gridX - (GRID_COLS - 1) / 2) * GRID_SPACING, cwz = (die.gridY - (GRID_ROWS - 1) / 2) * GRID_SPACING; spawnZenBurst(cwx, 0.4, cwz, ZEN_FIREWORK_COLORS[comboCount % ZEN_FIREWORK_COLORS.length]); createFloatingScore(die.gridX, die.gridY, 'COMBO +' + comboPoints); checkOnesChaining(); }
 
 function checkOnesChaining() { var chainedAny = false; for (var x = 0; x < GRID_COLS; x++) for (var y = 0; y < GRID_ROWS; y++) { var die = grid[x][y]; if (die && die.state === 'normal' && die.cellType === CELL_TYPE.ACTIVE && die.faces.top === 1) { var neighbors = [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]]; for (var ni = 0; ni < neighbors.length; ni++) { var nx = neighbors[ni][0], ny = neighbors[ni][1]; if (nx >= 0 && nx < GRID_COLS && ny >= 0 && ny < GRID_ROWS) { var nd = grid[nx][ny]; if (nd && nd.state === 'sinking') { var group = activeSinkingGroups.find(function(g) { return g.id === nd.sinkingGroup; }); if (group) { addDieToSinkingGroup(die, group); chainedAny = true; break; } } } } } } if (chainedAny) checkOnesChaining(); }
 
@@ -407,13 +411,180 @@ function findRollableDie() { var cx = Math.floor(GRID_COLS / 2), cy = Math.floor
 function showGestureHint(txt) { var h = document.getElementById('gesture-hint'); document.getElementById('hint-text').innerText = txt; h.classList.remove('gesture-hide'); }
 function hideGestureHint() { document.getElementById('gesture-hint').classList.add('gesture-hide'); }
 
-function startGame(mode) { AudioEngine.stopMenuMusic(); mode = mode || 'zen'; AudioEngine.init(); gameState = 'playing'; gameMode = mode; score = 0; comboCount = 0; animationLock = false; updateScoreDisplay(); hideComboBanner(); hideGestureHint(); document.getElementById('menu-screen').classList.remove('active'); document.getElementById('pause-screen').classList.remove('active'); document.getElementById('gameover-screen').classList.remove('active'); document.getElementById('hud-screen').classList.add('active'); document.getElementById('puzzle-hud').style.display = (mode === 'puzzle') ? 'flex' : 'none'; document.getElementById('battle-hud').style.display = (mode === 'battle') ? 'flex' : 'none'; document.getElementById('hud-screen').classList.toggle('hide-highscore', mode === 'battle'); document.getElementById('battle-timer-box').style.display = (mode === 'battle') ? 'block' : 'none'; if (mode === 'puzzle') setupPuzzleMode(); else if (mode === 'battle') setupBattleMode(); else { populateInitialBoard(); startSpawning(); } if (musicEnabled) { AudioEngine.stopBGM(); AudioEngine.startBGM(); } updateFullnessBar(countActiveDice() / totalCells); }
+function startGame(mode) { AudioEngine.stopMenuMusic(); mode = mode || 'zen'; AudioEngine.init(); gameState = 'playing'; gameMode = mode; score = 0; comboCount = 0; animationLock = false; updateScoreDisplay(); hideComboBanner(); hideGestureHint(); document.getElementById('menu-screen').classList.remove('active'); document.getElementById('pause-screen').classList.remove('active'); document.getElementById('gameover-screen').classList.remove('active'); document.getElementById('hud-screen').classList.add('active'); document.getElementById('puzzle-hud').style.display = (mode === 'puzzle') ? 'flex' : 'none'; document.getElementById('battle-hud').style.display = (mode === 'battle') ? 'flex' : 'none'; document.getElementById('hud-screen').classList.toggle('hide-highscore', mode === 'battle'); document.getElementById('battle-timer-box').style.display = (mode === 'battle') ? 'block' : 'none'; if (mode === 'puzzle') setupPuzzleMode(); else if (mode === 'battle') setupBattleMode();    else { populateInitialBoard(); startSpawning(); initZenEffects(); } if (musicEnabled) { AudioEngine.stopBGM(); AudioEngine.startBGM(); } updateFullnessBar(countActiveDice() / totalCells); }
 function startSpawning() { stopSpawning(); spawnTimerId = setTimeout(spawnRandomDie, DIFFICULTY_SETTINGS[selectedDifficulty].spawnInterval); }
 function pauseGame() { if (gameState !== 'playing') return; gameState = 'paused'; stopSpawning(); AudioEngine.stopBGM(); document.getElementById('hud-screen').classList.remove('active'); document.getElementById('pause-screen').classList.add('active'); }
 function resumeGame() { if (gameState !== 'paused') return; gameState = 'playing'; document.getElementById('pause-screen').classList.remove('active'); document.getElementById('hud-screen').classList.add('active'); if (gameMode !== 'puzzle') startSpawning(); if (musicEnabled) AudioEngine.startBGM(); }
-function quitToMenu() { gameState = 'menu'; AudioEngine.startMenuMusic(); stopSpawning(); AudioEngine.stopBGM(); if (gameMode === 'battle') { stopAITicks(); stopBattleTimer(); } document.getElementById('pause-screen').classList.remove('active'); document.getElementById('gameover-screen').classList.remove('active'); document.getElementById('hud-screen').classList.remove('active'); document.getElementById('hud-screen').classList.remove('hide-highscore'); document.getElementById('battle-timer-box').style.display = 'none'; document.getElementById('menu-screen').classList.add('active'); document.getElementById('menu-highscore').innerText = Number(highScore).toLocaleString(); clearAllDice(); }
+function quitToMenu() { gameState = 'menu'; clearZenEffects(); AudioEngine.startMenuMusic(); stopSpawning(); AudioEngine.stopBGM(); if (gameMode === 'battle') { stopAITicks(); stopBattleTimer(); } document.getElementById('pause-screen').classList.remove('active'); document.getElementById('gameover-screen').classList.remove('active'); document.getElementById('hud-screen').classList.remove('active'); document.getElementById('hud-screen').classList.remove('hide-highscore'); document.getElementById('battle-timer-box').style.display = 'none'; document.getElementById('menu-screen').classList.add('active'); document.getElementById('menu-highscore').innerText = Number(highScore).toLocaleString(); clearAllDice(); }
 function clearAllDice() { for (var x = 0; x < GRID_COLS; x++) for (var y = 0; y < GRID_ROWS; y++) { if (grid[x] && grid[x][y]) { diceGroup.remove(grid[x][y].pivotGroup); grid[x][y].mesh.geometry.dispose(); } if (sinkingHighlights[x] && sinkingHighlights[x][y]) sinkingHighlights[x][y].visible = false; } grid = Array(GRID_COLS).fill(null).map(function() { return Array(GRID_ROWS).fill(null); }); activeSinkingGroups = []; }
-function triggerGameOver() { AudioEngine.stopMenuMusic(); gameState = 'gameover'; stopSpawning(); AudioEngine.stopBGM(); var isBattle = gameMode === 'battle', playerWon = battlePlayerScore >= battleAiScore; if (isBattle && playerWon) AudioEngine.playWin(); else AudioEngine.playGameOver(); if (gameMode === 'battle') { stopAITicks(); stopBattleTimer(); } var isNewHigh = false; if (gameMode !== 'battle' && score > highScore) { highScore = score; localStorage.setItem('devildice_zen_hs', highScore); isNewHigh = true; } document.getElementById('go-score').innerText = (gameMode === 'battle' ? battlePlayerScore : score).toLocaleString(); document.getElementById('go-combo').innerText = comboCount.toString(); document.getElementById('new-high-indicator').style.display = isNewHigh ? 'block' : 'none'; var titleEl = document.getElementById('gameover-title-text'); if (gameMode === 'puzzle') titleEl.innerText = puzzleCleared ? 'ALL PUZZLES CLEARED!' : 'OUT OF MOVES!'; else if (isBattle) titleEl.innerText = playerWon ? 'YOU WIN!' : 'YOU LOSE!'; else titleEl.innerText = 'BOARD FILLED!'; document.getElementById('battle-go-stats').style.display = isBattle ? '' : 'none'; if (isBattle) { document.getElementById('go-player-score').innerText = battlePlayerScore.toLocaleString(); document.getElementById('go-ai-score').innerText = battleAiScore.toLocaleString(); var pr = document.getElementById('go-player-row'), ar = document.getElementById('go-ai-row'); if (playerWon) { pr.classList.add('winner'); ar.classList.remove('winner'); } else { ar.classList.add('winner'); pr.classList.remove('winner'); } } else { document.getElementById('go-player-row').classList.remove('winner'); document.getElementById('go-ai-row').classList.remove('winner'); } document.getElementById('hud-screen').classList.remove('active'); document.getElementById('gameover-screen').classList.add('active'); document.getElementById('battle-timer-box').style.display = 'none'; }
+
+// ── Zen mode background effects (Tetris Effect style fireworks) ──
+function initZenEffects() {
+    // Ambient floating particle field behind the board
+    if (zenAmbientParticles) {
+        worldGroup.remove(zenAmbientParticles);
+        zenAmbientParticles.geometry.dispose();
+        zenAmbientParticles.material.dispose();
+    }
+    var positions = new Float32Array(ZEN_AMBIENT_COUNT * 3);
+    var sizes = new Float32Array(ZEN_AMBIENT_COUNT);
+    var colors = new Float32Array(ZEN_AMBIENT_COUNT * 3);
+    for (var i = 0; i < ZEN_AMBIENT_COUNT; i++) {
+        positions[i*3] = (Math.random() - 0.5) * 24;
+        positions[i*3+1] = (Math.random() - 0.5) * 18;
+        positions[i*3+2] = -2 - Math.random() * 5;
+        sizes[i] = 0.03 + Math.random() * 0.08;
+        var c = new THREE.Color(ZEN_FIREWORK_COLORS[Math.floor(Math.random() * ZEN_FIREWORK_COLORS.length)]);
+        colors[i*3] = c.r; colors[i*3+1] = c.g; colors[i*3+2] = c.b;
+    }
+    var geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    var mat = new THREE.PointsMaterial({
+        size: 0.06, vertexColors: true, transparent: true, opacity: 0.35,
+        blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true
+    });
+    zenAmbientParticles = new THREE.Points(geom, mat);
+    worldGroup.add(zenAmbientParticles);
+    var vel = [];
+    for (var j = 0; j < ZEN_AMBIENT_COUNT; j++) {
+        vel.push({
+            vx: (Math.random() - 0.5) * 0.003,
+            vy: 0.003 + Math.random() * 0.006,
+            phase: Math.random() * Math.PI * 2
+        });
+    }
+    zenAmbientParticles.userData.velocities = vel;
+    // Clean up old bursts from previous sessions
+    zenFireworkBursts.forEach(function(m) { worldGroup.remove(m); m.geometry.dispose(); m.material.dispose(); });
+    zenFireworkBursts = [];
+    startZenFireworks();
+}
+
+function startZenFireworks() {
+    stopZenFireworks();
+    zenFireworkTimerId = setTimeout(function tick() {
+        if (gameMode !== 'zen' || gameState !== 'playing') return;
+        spawnZenBurst();
+        zenFireworkTimerId = setTimeout(tick, 2000 + Math.random() * 3000);
+    }, 1000 + Math.random() * 2000);
+}
+
+function stopZenFireworks() {
+    if (zenFireworkTimerId) { clearTimeout(zenFireworkTimerId); zenFireworkTimerId = null; }
+}
+
+function spawnZenBurst(posX, posY, posZ, forceColor) {
+    if (gameMode !== 'zen' || !worldGroup) return;
+    var bx = (typeof posX !== 'undefined') ? posX : (Math.random() - 0.5) * 14;
+    var by = (typeof posY !== 'undefined') ? posY : (Math.random() - 0.5) * 8;
+    var bz = (typeof posZ !== 'undefined') ? posZ : -2 - Math.random() * 3;
+    var count = 25 + Math.floor(Math.random() * 20);
+    var color = forceColor || ZEN_FIREWORK_COLORS[Math.floor(Math.random() * ZEN_FIREWORK_COLORS.length)];
+    var positions = new Float32Array(count * 3);
+    var colors = new Float32Array(count * 3);
+    var velocities = [];
+    var baseC = new THREE.Color(color);
+    for (var i = 0; i < count; i++) {
+        positions[i*3] = bx; positions[i*3+1] = by; positions[i*3+2] = bz;
+        var angleH = Math.random() * Math.PI * 2;
+        var angleV = (Math.random() - 0.5) * Math.PI * 0.8;
+        var speed = 0.02 + Math.random() * 0.045;
+        velocities.push({
+            vx: Math.cos(angleH) * Math.cos(angleV) * speed,
+            vy: Math.sin(angleV) * speed + 0.012,
+            vz: Math.sin(angleH) * Math.cos(angleV) * speed,
+            life: 0, maxLife: 40 + Math.random() * 50
+        });
+        var pc = baseC.clone().multiplyScalar(0.6 + Math.random() * 0.4);
+        colors[i*3] = pc.r; colors[i*3+1] = pc.g; colors[i*3+2] = pc.b;
+    }
+    var geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    var mat = new THREE.PointsMaterial({
+        size: 0.1, vertexColors: true, transparent: true, opacity: 0.9,
+        blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true
+    });
+    var mesh = new THREE.Points(geom, mat);
+    mesh.userData.velocities = velocities;
+    mesh.userData.age = 0;
+    mesh.userData.maxAge = 110;
+    worldGroup.add(mesh);
+    zenFireworkBursts.push(mesh);
+}
+
+function clearZenEffects() {
+    stopZenFireworks();
+    if (zenAmbientParticles) {
+        worldGroup.remove(zenAmbientParticles);
+        zenAmbientParticles.geometry.dispose();
+        zenAmbientParticles.material.dispose();
+        zenAmbientParticles = null;
+    }
+    zenFireworkBursts.forEach(function(m) {
+        worldGroup.remove(m);
+        m.geometry.dispose();
+        m.material.dispose();
+    });
+    zenFireworkBursts = [];
+}
+
+function updateZenEffects() {
+    // Update ambient particle float
+    if (zenAmbientParticles) {
+        var pos = zenAmbientParticles.geometry.attributes.position;
+        var vel = zenAmbientParticles.userData.velocities;
+        if (pos && vel) {
+            for (var i = 0; i < ZEN_AMBIENT_COUNT && i < vel.length; i++) {
+                pos.array[i*3] += vel[i].vx;
+                pos.array[i*3+1] += vel[i].vy;
+                pos.array[i*3+2] += Math.sin(zenAmbientPhase + vel[i].phase) * 0.001;
+                // Wrap to bottom when reaching top
+                if (pos.array[i*3+1] > 10) {
+                    pos.array[i*3] = (Math.random() - 0.5) * 24;
+                    pos.array[i*3+1] = -10;
+                    pos.array[i*3+2] = -2 - Math.random() * 5;
+                }
+            }
+            pos.needsUpdate = true;
+        }
+    }
+    zenAmbientPhase += 0.015;
+
+    // Update firework bursts
+    for (var i = zenFireworkBursts.length - 1; i >= 0; i--) {
+        var burst = zenFireworkBursts[i];
+        burst.userData.age++;
+        var progress = burst.userData.age / burst.userData.maxAge;
+        var pos = burst.geometry.attributes.position;
+        var vel = burst.userData.velocities;
+        var col = burst.geometry.attributes.color;
+        if (pos && vel) {
+            for (var j = 0; j < vel.length && j * 3 < pos.array.length; j++) {
+                pos.array[j*3] += vel[j].vx;
+                pos.array[j*3+1] += vel[j].vy;
+                pos.array[j*3+2] += vel[j].vz;
+                vel[j].vx *= 0.965;
+                vel[j].vy *= 0.965;
+                vel[j].vz *= 0.965;
+            }
+            pos.needsUpdate = true;
+            if (col && col.array) {
+                for (var k = 0; k < col.array.length; k++) col.array[k] *= 0.985;
+                col.needsUpdate = true;
+            }
+        }
+        burst.material.opacity = Math.max(0, 1 - progress * 1.1);
+        if (progress >= 1) {
+            worldGroup.remove(burst);
+            burst.geometry.dispose();
+            burst.material.dispose();
+            zenFireworkBursts.splice(i, 1);
+        }
+    }
+}
+function triggerGameOver() { AudioEngine.stopMenuMusic(); clearZenEffects(); gameState = 'gameover'; stopSpawning(); AudioEngine.stopBGM(); var isBattle = gameMode === 'battle', playerWon = battlePlayerScore >= battleAiScore; if (isBattle && playerWon) AudioEngine.playWin(); else AudioEngine.playGameOver(); if (gameMode === 'battle') { stopAITicks(); stopBattleTimer(); } var isNewHigh = false; if (gameMode !== 'battle' && score > highScore) { highScore = score; localStorage.setItem('devildice_zen_hs', highScore); isNewHigh = true; } document.getElementById('go-score').innerText = (gameMode === 'battle' ? battlePlayerScore : score).toLocaleString(); document.getElementById('go-combo').innerText = comboCount.toString(); document.getElementById('new-high-indicator').style.display = isNewHigh ? 'block' : 'none'; var titleEl = document.getElementById('gameover-title-text'); if (gameMode === 'puzzle') titleEl.innerText = puzzleCleared ? 'ALL PUZZLES CLEARED!' : 'OUT OF MOVES!'; else if (isBattle) titleEl.innerText = playerWon ? 'YOU WIN!' : 'YOU LOSE!'; else titleEl.innerText = 'BOARD FILLED!'; document.getElementById('battle-go-stats').style.display = isBattle ? '' : 'none'; if (isBattle) { document.getElementById('go-player-score').innerText = battlePlayerScore.toLocaleString(); document.getElementById('go-ai-score').innerText = battleAiScore.toLocaleString(); var pr = document.getElementById('go-player-row'), ar = document.getElementById('go-ai-row'); if (playerWon) { pr.classList.add('winner'); ar.classList.remove('winner'); } else { ar.classList.add('winner'); pr.classList.remove('winner'); } } else { document.getElementById('go-player-row').classList.remove('winner'); document.getElementById('go-ai-row').classList.remove('winner'); } document.getElementById('hud-screen').classList.remove('active'); document.getElementById('gameover-screen').classList.add('active'); document.getElementById('battle-timer-box').style.display = 'none'; }
 
 function setupPuzzleMode() { puzzleStage = 1; setupPuzzleStage(); }
 function setupPuzzleStage() {
@@ -551,7 +722,7 @@ function hideComboBanner() { document.getElementById('combo-display').classList.
 function setupControlListeners() { window.addEventListener('keydown', handleKeyboard); setupPointerEvents(); document.getElementById('zen-btn').addEventListener('click', function() { startGame('zen'); }); document.getElementById('puzzle-btn').addEventListener('click', function() { startGame('puzzle'); }); document.getElementById('battle-btn').addEventListener('click', function() { startGame('battle'); }); document.getElementById('how-to-btn').addEventListener('click', function() { document.getElementById('how-to-modal').classList.add('active'); }); document.getElementById('close-how-to').addEventListener('click', function() { document.getElementById('how-to-modal').classList.remove('active'); }); document.getElementById('settings-btn').addEventListener('click', function() { document.getElementById('board-size').value = boardSize; document.getElementById('sound-toggle').checked = soundEnabled; document.getElementById('music-toggle').checked = musicEnabled; document.getElementById('difficulty').value = selectedDifficulty; document.getElementById('ai-difficulty').value = aiDifficulty; document.getElementById('battle-duration').value = battleDuration; document.getElementById('settings-modal').classList.add('active'); }); document.getElementById('close-settings').addEventListener('click', function() { soundEnabled = document.getElementById('sound-toggle').checked; var mc = document.getElementById('music-toggle').checked; if (mc !== musicEnabled) { musicEnabled = mc; if (gameState === 'playing') { if (musicEnabled) AudioEngine.startBGM(); else AudioEngine.stopBGM(); } else if (gameState === 'menu') { if (musicEnabled) AudioEngine.startMenuMusic(); else AudioEngine.stopMenuMusic(); } } selectedDifficulty = document.getElementById('difficulty').value; aiDifficulty = document.getElementById('ai-difficulty').value; battleDuration = parseInt(document.getElementById('battle-duration').value); var newBoardSize = document.getElementById('board-size').value; if (newBoardSize !== boardSize) { stopSpawning(); clearAllDice(); setBoardSize(newBoardSize); if (gameState === 'playing') startGame(gameMode); else quitToMenu(); } document.getElementById('settings-modal').classList.remove('active'); }); document.getElementById('pause-btn').addEventListener('click', pauseGame); document.getElementById('resume-btn').addEventListener('click', resumeGame); document.getElementById('restart-pause-btn').addEventListener('click', function() { startGame(gameMode); }); document.getElementById('quit-btn').addEventListener('click', quitToMenu); document.getElementById('retry-btn').addEventListener('click', function() { startGame(gameMode); }); document.getElementById('menu-quit-btn').addEventListener('click', quitToMenu); }
 
 var _frameCount = 0, _lastFpsTime = performance.now(), _currentFPS = 60;
-function gameLoop() { requestAnimationFrame(gameLoop); _frameCount++; var now = performance.now(); if (now - _lastFpsTime >= 1000) { _currentFPS = Math.round(_frameCount * 1000 / (now - _lastFpsTime)); _frameCount = 0; _lastFpsTime = now; } if (renderer && scene && camera) renderer.render(scene, camera); if (gameState === 'playing') { updateSinkingDice(); updateSinkingHighlights(); var activeCount = countActiveDice(); updateFullnessBar(activeCount / totalCells); if (gameMode !== 'battle' && activeCount >= totalCells) triggerGameOver(); if (gameMode === 'battle') updateFreezeDisplay(); } }
+function gameLoop() { requestAnimationFrame(gameLoop); _frameCount++; var now = performance.now(); if (now - _lastFpsTime >= 1000) { _currentFPS = Math.round(_frameCount * 1000 / (now - _lastFpsTime)); _frameCount = 0; _lastFpsTime = now; } if (renderer && scene && camera) renderer.render(scene, camera); if (gameState === 'playing') { updateSinkingDice(); updateSinkingHighlights(); updateZenEffects(); var activeCount = countActiveDice(); updateFullnessBar(activeCount / totalCells); if (gameMode !== 'battle' && activeCount >= totalCells) triggerGameOver(); if (gameMode === 'battle') updateFreezeDisplay(); } }
 function updateSinkingHighlights() { for (var x = 0; x < GRID_COLS; x++) for (var y = 0; y < GRID_ROWS; y++) { var hl = sinkingHighlights[x] && sinkingHighlights[x][y]; if (hl) { var die = grid[x] && grid[x][y]; hl.visible = !!(die && die.state === 'sinking'); } } }
 
 window.onload = function() { document.getElementById('menu-highscore').innerText = Number(highScore).toLocaleString(); initEngine(); setupControlListeners(); gameLoop(); AudioEngine.startMenuMusic(); };
