@@ -1,4 +1,4 @@
-const CACHE_NAME = 'devildice-v1';
+const CACHE_NAME = 'devildice-v2';
 const ASSETS = [
     './',
     './index.html',

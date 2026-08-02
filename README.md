@@ -2,7 +2,7 @@
 
 A high-fidelity, responsive, 100% self-contained 3D recreation of the classic PlayStation game **Devil Dice** (known as **XI** in Japan), optimized for mobile devices (iOS/Android) and modern desktop web browsers.
 
-This game is built with pure, lightweight **HTML5, CSS3, and modern ECMAScript/Three.js WebGL**. It runs entirely in the client with **zero external assets to download** (all textures and sound effects are generated procedurally in code!). This ensures instant load times, seamless offline play, and absolute reliability when packaged for native mobile distribution.
+This game is built with pure, lightweight **HTML5, CSS3, and modern ECMAScript/Three.js WebGL**. It runs entirely in the client with **zero external game assets to download** — all textures and sound effects are generated procedurally in code! The only external library is Three.js, fetched once from a CDN and cached by the service worker for offline play. This ensures fast load times, seamless offline play, and absolute reliability when packaged for native mobile distribution.
 
 ---
 
@@ -72,10 +72,9 @@ This project was built from the ground up to be easily distributed on iOS and An
 
 [Capacitor](https://capacitorjs.com/) is a modern tool that turns any web application into a native iOS and Android app with full native bridge access.
 
-#### 1. Initialize a Node Project & Install Capacitor
-In the project root directory, run:
+#### 1. Install Capacitor
+In the project root directory (a `package.json` already exists for the playtester tooling), run:
 ```bash
-npm init -y
 npm install @capacitor/core @capacitor/cli
 ```
 

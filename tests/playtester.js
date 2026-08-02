@@ -2,14 +2,17 @@
 /**
  * Devil Dice 3D — Headless Playtester
  *
- * Launches a headless Chrome via Puppeteer, starts the game,
- * simulates 30+ seconds of touch gestures, captures console logs,
- * FPS metrics, and screenshots for visual regression testing.
+ * Launches a headless Chrome via Puppeteer, starts the game with a fixed
+ * seed (?seed=) so the board layout is reproducible, simulates 30+ seconds
+ * of real touch swipes (CDP Input.dispatchTouchEvent -> pointer events),
+ * and captures console logs, FPS metrics, and screenshots for visual
+ * regression testing against an in-game golden baseline.
  *
  * Usage: node tests/playtester.js [--golden golden/baseline.png] [--port 8000]
  *
- * Outputs structured JSON to stdout with:
- *   { passed, fpsAvg, fpsMin, errors, warnings, screenshot, diffPct }
+ * Outputs structured JSON to stdout:
+ *   { passed, fpsAvg, fpsMin, errors, warnings, screenshot, diffPct,
+ *     movesAttempted, movesCompleted, matchesFound, ... }
  */
 
 const puppeteer = require('puppeteer');
@@ -23,6 +26,11 @@ const ARGS = {
   port: parseInt(process.argv.find(a => a.startsWith('--port='))?.split('=')[1] || '8000', 10),
   duration: parseInt(process.argv.find(a => a.startsWith('--duration='))?.split('=')[1] || '35000', 10),
 };
+const BASELINE = process.argv.includes('--baseline');
+
+// Deterministic seeds: the page must be loaded with the same seed as the
+// golden baseline so the initial board layout matches exactly.
+const SEED = '20260802';
 
 const TEST_ID = Date.now().toString(36);
 const RESULTS = {
@@ -38,14 +46,56 @@ const RESULTS = {
   movesAttempted: 0,
   movesCompleted: 0,
   matchesFound: 0,
+  maxConcurrentSinkingGroups: 0,
   testId: TEST_ID,
   zenEffectsVerified: false,
   zenAmbientParticles: false,
   zenBurstsSpawned: 0,
 };
 
-// ── Utility: random int in range ──
-function rand(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+// ── Seeded RNG (node side) so the simulated move sequence is reproducible ──
+let _rngState = parseInt(SEED, 10);
+function rand(min, max) {
+  _rngState = (_rngState * 1664525 + 1013904223) >>> 0;
+  const r = _rngState / 4294967296;
+  return Math.floor(r * (max - min + 1)) + min;
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ── Grid occupancy signature (dice positions + top faces only) ──
+function occupancySig(state) {
+  const cells = [];
+  for (let x = 0; x < state.cols; x++) {
+    for (let y = 0; y < state.rows; y++) {
+      const c = state.matrix[x] && state.matrix[x][y];
+      cells.push(c ? `${c.type}:${c.top}` : '.');
+    }
+  }
+  return cells.join(',');
+}
+
+// ── Real touch swipe via CDP. Chrome synthesizes pointer events from these,
+//    so the game's pointer-based gesture handler sees a genuine swipe. ──
+async function touchSwipe(page, from, to) {
+  const client = await page.createCDPSession();
+  try {
+    await client.send('Input.dispatchTouchEvent', {
+      type: 'touchStart',
+      touchPoints: [{ x: from.x, y: from.y }]
+    });
+    // A single jump to the destination keeps the whole gesture comfortably
+    // under the game's HOLD_THRESHOLD (200ms) even with CDP round-trip
+    // latency, so it registers as a roll rather than a hold.
+    await client.send('Input.dispatchTouchEvent', {
+      type: 'touchMove',
+      touchPoints: [{ x: to.x, y: to.y }]
+    });
+    await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  } finally {
+    await client.detach();
+  }
+}
 
 // ── Main playtest routine ──
 async function runPlaytest() {
@@ -79,19 +129,43 @@ async function runPlaytest() {
     RESULTS.errors.push('PAGE_ERROR: ' + err.message);
   });
 
-  // Navigate to the game
-  const url = `http://localhost:${ARGS.port}`;
+  // Navigate to the game with a deterministic seed
+  const baseUrl = `http://localhost:${ARGS.port}`;
+  const url = `${baseUrl}/?seed=${SEED}`;
   await page.goto(url, { waitUntil: 'networkidle0', timeout: 15000 });
   await page.waitForSelector('#zen-btn', { timeout: 5000 });
 
   // Start Zen mode
   await page.click('#zen-btn');
 
-  // Wait for dice to appear and game to initialize
+  // Wait for the game to initialize and all dice to finish rising so the
+  // board is visually settled (matching the golden baseline state).
   await page.waitForFunction(() =>
     window.autoGameState && window.autoGameState.gameState === 'playing', { timeout: 5000 }
   );
-  await sleep(1500); // Let first dice rise animation complete
+  await page.waitForFunction(() => {
+    const s = window.autoGameState;
+    if (!s || s.gameState !== 'playing') return false;
+    for (let x = 0; x < s.cols; x++) {
+      for (let y = 0; y < s.rows; y++) {
+        const cell = s.matrix[x] && s.matrix[x][y];
+        if (cell && cell.state !== 'normal') return false;
+      }
+    }
+    return true;
+  }, { timeout: 10000 });
+  await sleep(400); // let the final animation frame settle
+
+  // Regression screenshot: deterministic, pre-move, firework-free (seeded mode)
+  const regressionScreenshot = `test_output/${TEST_ID}_regression.png`;
+  await page.screenshot({ path: regressionScreenshot, fullPage: false });
+
+  // ── Baseline mode: save the settled screenshot as the golden master ──
+  if (BASELINE) {
+    fs.copyFileSync(regressionScreenshot, ARGS.golden);
+    await browser.close();
+    return { passed: true, screenshot: ARGS.golden, golden: ARGS.golden, testId: TEST_ID, mode: 'baseline' };
+  }
 
   // ── Main play loop: 30+ seconds of simulated play ──
   const startTime = Date.now();
@@ -110,7 +184,6 @@ async function runPlaytest() {
     // If the game ended, restart
     if (!state || state.gameState !== 'playing') {
       RESULTS.warnings.push(`Game ended at step ${step} (state=${state?.gameState}). Restarting...`);
-      // Try to click retry or restart
       const retryBtn = await page.$('#retry-btn');
       if (retryBtn) {
         await retryBtn.click();
@@ -125,18 +198,15 @@ async function runPlaytest() {
       continue;
     }
 
-    // Find a rollable die on the board using the matrix
+    // Collect all normal dice with at least one empty neighbor
     const matrix = state.matrix;
     const cols = state.cols;
     const rows = state.rows;
-
-    // Collect all normal dice positions
     const normalDice = [];
     for (let x = 0; x < cols; x++) {
       for (let y = 0; y < rows; y++) {
         const cell = matrix[x] && matrix[x][y];
         if (cell && cell.state === 'normal' && cell.type === 1) {
-          // Check if any adjacent cell is empty
           const neighbors = [[x+1,y],[x-1,y],[x,y+1],[x,y-1]];
           for (const [nx, ny] of neighbors) {
             if (nx >= 0 && nx < cols && ny >= 0 && ny < rows) {
@@ -159,46 +229,36 @@ async function runPlaytest() {
     const pick = normalDice[rand(0, normalDice.length - 1)];
     RESULTS.movesAttempted++;
 
-    // Calculate screen positions for the swipe gesture
-    const viewport = page.viewport();
-    const gridCenterX = viewport.width / 2;
-    const gridCenterY = viewport.height * 0.45;
+    // Ask the game for real screen coordinates so the touch lands on the die
+    const src = await page.evaluate((gx, gy) => window.gridToScreen(gx, gy), pick.x, pick.y);
+    const dst = await page.evaluate((gx, gy) => window.gridToScreen(gx, gy), pick.nx, pick.ny);
 
-    const cellW = viewport.width * 0.8 / cols;
-    const cellH = viewport.height * 0.5 / rows;
-
-    // Swipe from the source die toward the empty neighbor
-    const srcX = gridCenterX + (pick.x - (cols - 1) / 2) * cellW;
-    const srcY = gridCenterY + (pick.y - (rows - 1) / 2) * cellH;
-    const dstX = gridCenterX + (pick.nx - (cols - 1) / 2) * cellW;
-    const dstY = gridCenterY + (pick.ny - (rows - 1) / 2) * cellH;
+    const prevSig = occupancySig(state);
+    const prevScore = state.score;
+    const prevGroups = state.activeSinkingGroups;
 
     // Quick swipe (under HOLD_THRESHOLD=200ms) = roll
-    await page.touchscreen.touchStart(srcX, srcY);
-    await sleep(30);
-    // Move in steps to simulate a real swipe
-    const steps = 6;
-    for (let s = 1; s <= steps; s++) {
-      const t = s / steps;
-      const cx = srcX + (dstX - srcX) * t;
-      const cy = srcY + (dstY - srcY) * t;
-      await page.mouse.move(cx, cy);
-      await sleep(10);
-    }
-    await page.touchscreen.touchEnd();
-    await sleep(350);
+    await touchSwipe(page, src, dst);
 
-    // Check if the move changed the state (i.e., die moved)
+    // Wait for the animation to complete (animationLock released), then read
+    // the resulting state to verify the move actually happened.
+    await page.waitForFunction(() => window.autoGameState && !window.autoGameState.animationLock, { timeout: 1500 }).catch(() => {});
+    await sleep(100);
     const newState = await page.evaluate(() => window.autoGameState);
     if (newState) {
-      RESULTS.movesCompleted++;
-      // Check for sinking groups = matches found
-      if (newState.activeSinkingGroups > RESULTS.matchesFound) {
-        RESULTS.matchesFound = newState.activeSinkingGroups;
+      const newSig = occupancySig(newState);
+      if (newSig !== prevSig) {
+        RESULTS.movesCompleted++;
+      }
+      if (newState.score > prevScore) {
+        RESULTS.matchesFound++;
+      }
+      if (newState.activeSinkingGroups > RESULTS.maxConcurrentSinkingGroups) {
+        RESULTS.maxConcurrentSinkingGroups = newState.activeSinkingGroups;
       }
     }
 
-    // Every 10 steps, take a screenshot
+    // Every 10 steps, take a debug screenshot
     if (step % 10 === 0) {
       const screenshotPath = `test_output/${TEST_ID}_step${step}.png`;
       await page.screenshot({ path: screenshotPath, fullPage: false });
@@ -249,11 +309,12 @@ async function runPlaytest() {
   }
   if (RESULTS.fpsMin === Infinity) RESULTS.fpsMin = 0;
 
-  // ── Visual regression against golden master ──
+  // ── Visual regression against golden master (both captured at the same
+  //    deterministic, settled, pre-move game state) ──
   if (fs.existsSync(ARGS.golden)) {
     try {
       const golden = await loadImage(ARGS.golden);
-      const actual = await loadImage(finalScreenshot);
+      const actual = await loadImage(regressionScreenshot);
 
       const w = Math.min(golden.width, actual.width);
       const h = Math.min(golden.height, actual.height);
@@ -300,14 +361,11 @@ async function runPlaytest() {
   const hasCriticalErrors = RESULTS.errors.length > 0;
   const hasFpsIssues = RESULTS.fpsMin < 45 && RESULTS.fpsMin > 0;
   const hasVisualDrift = RESULTS.diffPct !== null && RESULTS.diffPct > 5.0;
-
-  const hasZenEffectsFailed = ARGS.golden && !RESULTS.zenEffectsVerified;
+  const hasZenEffectsFailed = !RESULTS.zenEffectsVerified;
   RESULTS.passed = !hasCriticalErrors && !hasFpsIssues && !hasVisualDrift && !hasZenEffectsFailed;
 
   return RESULTS;
 }
-
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // ── Run ──
 runPlaytest()

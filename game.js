@@ -11,6 +11,17 @@ if ('serviceWorker' in navigator) {
             .catch(function(err) { console.error('SW failed', err); });
     });
 }
+// ── Deterministic RNG hook (headless playtester: ?seed=N) ──
+(function() {
+    var m = /[?&]seed=(\d+)/.exec(window.location.search);
+    if (m) {
+        var seed = parseInt(m[1], 10) || 1;
+        Math.random = function() {
+            seed = (seed * 1664525 + 1013904223) >>> 0;
+            return seed / 4294967296;
+        };
+    }
+})();
 var GRID_COLS = 7, GRID_ROWS = 7, GRID_SPACING = 1.3, DIE_SCALE = 1.0;
 var ROLL_DURATION = 220, SLIDE_DURATION = 180, SINK_DURATION = 5500;
 var HOLD_THRESHOLD = 200, SWIPE_THRESHOLD = 18;
@@ -234,7 +245,7 @@ Die.prototype.animateRise = function() {
         var p = Math.min((Date.now() - startTime) / duration, 1.0), e = 1 - Math.pow(1 - p, 3);
         self.height = -1.0 + e; self._syncPivot();
         if (p < 1) requestAnimationFrame(tick);
-        else { self.state = 'normal'; self.height = 0; self.mesh.material = getDiceMaterials(self.faces, 'normal'); self._syncPivot(); checkAllMatches(); }
+        else { self.state = 'normal'; self.height = 0; self.mesh.material = getDiceMaterials(self.faces, 'normal'); self._syncPivot(); if (gameMode === 'battle') battleCurrentTurn = null; checkAllMatches(); }
     }
     requestAnimationFrame(tick);
 };
@@ -271,8 +282,20 @@ Die.prototype.slide = function(direction, onComplete) {
     if (this.cellType === CELL_TYPE.LOCKED) { if (onComplete) onComplete(); return; }
     var d = DIRECTIONS[direction], tx = this.gridX + d.dx, ty = this.gridY + d.dy;
     if (tx < 0 || tx >= GRID_COLS || ty < 0 || ty >= GRID_ROWS) { if (onComplete) onComplete(); return; }
-    if (grid[tx][ty] !== null) { AudioEngine.playMove(); if (onComplete) onComplete(); return; }
-    this._execSlide(direction, onComplete);
+    if (grid[tx][ty] === null) { this._execSlide(direction, onComplete); return; }
+    // Occupied target: try to push the whole lane of normal active dice.
+    var chain = [], cx = tx, cy = ty;
+    while (cx >= 0 && cx < GRID_COLS && cy >= 0 && cy < GRID_ROWS) {
+        var cd = grid[cx][cy];
+        if (!cd) break;
+        // Locked/sinking/animating dice are obstacles, not pushable.
+        if (cd.cellType !== CELL_TYPE.ACTIVE || cd.state !== 'normal') { chain = null; break; }
+        chain.push(cd);
+        cx += d.dx; cy += d.dy;
+    }
+    var pushable = chain && chain.length > 0 && cx >= 0 && cx < GRID_COLS && cy >= 0 && cy < GRID_ROWS && grid[cx][cy] === null;
+    if (!pushable) { AudioEngine.playMove(); if (onComplete) onComplete(); return; }
+    this._execPush(direction, chain, onComplete);
 };
 Die.prototype._execSlide = function(direction, onComplete) {
     this.state = 'sliding'; var sx = this.gridX, sy = this.gridY, d = DIRECTIONS[direction], ex = sx + d.dx, ey = sy + d.dy;
@@ -280,6 +303,41 @@ Die.prototype._execSlide = function(direction, onComplete) {
     var self = this, startTime = Date.now(), sWX = (sx - (GRID_COLS - 1) / 2) * GRID_SPACING, sWZ = (sy - (GRID_ROWS - 1) / 2) * GRID_SPACING;
     var eWX = (ex - (GRID_COLS - 1) / 2) * GRID_SPACING, eWZ = (ey - (GRID_ROWS - 1) / 2) * GRID_SPACING;
     function tick() { var p = Math.min((Date.now() - startTime) / SLIDE_DURATION, 1.0), ease = 1 - Math.pow(1 - p, 2); self.pivotGroup.position.set(sWX + ease * (eWX - sWX), 0, sWZ + ease * (eWZ - sWZ)); if (p < 1) requestAnimationFrame(tick); else { self.state = 'normal'; self.height = 0; self._syncPivot(); if (onComplete) onComplete(); } }
+    requestAnimationFrame(tick);
+};
+Die.prototype._execPush = function(direction, chain, onComplete) {
+    var self = this, d = DIRECTIONS[direction];
+    var moves = [];
+    for (var i = 0; i < chain.length; i++) {
+        var die = chain[i];
+        moves.push({ die: die, sx: die.gridX, sy: die.gridY, ex: die.gridX + d.dx, ey: die.gridY + d.dy });
+    }
+    moves.push({ die: self, sx: self.gridX, sy: self.gridY, ex: chain[0].gridX, ey: chain[0].gridY });
+    // Update the grid atomically, then animate the whole chain in parallel.
+    moves.forEach(function(m) { grid[m.sx][m.sy] = null; m.die.state = 'sliding'; });
+    moves.forEach(function(m) { grid[m.ex][m.ey] = m.die; m.die.gridX = m.ex; m.die.gridY = m.ey; });
+    AudioEngine.playSlide();
+    var startTime = Date.now();
+    var animMoves = moves.map(function(m) {
+        return {
+            die: m.die,
+            sX: (m.sx - (GRID_COLS - 1) / 2) * GRID_SPACING,
+            sZ: (m.sy - (GRID_ROWS - 1) / 2) * GRID_SPACING,
+            eX: (m.ex - (GRID_COLS - 1) / 2) * GRID_SPACING,
+            eZ: (m.ey - (GRID_ROWS - 1) / 2) * GRID_SPACING
+        };
+    });
+    function tick() {
+        var p = Math.min((Date.now() - startTime) / SLIDE_DURATION, 1.0), ease = 1 - Math.pow(1 - p, 2);
+        animMoves.forEach(function(am) {
+            am.die.pivotGroup.position.set(am.sX + ease * (am.eX - am.sX), 0, am.sZ + ease * (am.eZ - am.sZ));
+        });
+        if (p < 1) requestAnimationFrame(tick);
+        else {
+            animMoves.forEach(function(am) { am.die.state = 'normal'; am.die.height = 0; am.die._syncPivot(); });
+            if (onComplete) onComplete();
+        }
+    }
     requestAnimationFrame(tick);
 };
 Die.prototype.startSinking = function(groupId) { if (this.state === 'sinking') return; this.state = 'sinking'; this.sinkingGroup = groupId; this.sinkingTimer = Date.now(); var isOne = (this.faces.top === 1); this.mesh.material = getDiceMaterials(this.faces, isOne ? 'sinking_one' : 'sinking'); };
@@ -404,8 +462,8 @@ function onPointerUp(e) { if (inputState.activePtrId !== e.pointerId) return; if
 function raycastDie(cx, cy) { var rect = renderer.domElement.getBoundingClientRect(), mx = ((cx - rect.left) / rect.width) * 2 - 1, my = -((cy - rect.top) / rect.height) * 2 + 1; var rc = new THREE.Raycaster(); rc.setFromCamera(new THREE.Vector2(mx, my), camera); var hits = rc.intersectObjects(diceGroup.children, true); if (hits.length > 0) { var obj = hits[0].object; while (obj && !obj.userData.die) obj = obj.parent; if (obj && obj.userData.die) return obj.userData.die; } return null; }
 function getSwipeDirection(dx, dy) { var ang = Math.atan2(dy, dx), deg = ang * (180 / Math.PI); if (deg < 0) deg += 360; if (deg >= 0 && deg < 90) return "east"; if (deg >= 90 && deg < 180) return "south"; if (deg >= 180 && deg < 270) return "west"; return "north"; }
 function getGridCellFromPointer(cx, cy) { var rect = renderer.domElement.getBoundingClientRect(), mx = ((cx - rect.left) / rect.width) * 2 - 1, my = -((cy - rect.top) / rect.height) * 2 + 1; var rc = new THREE.Raycaster(); rc.setFromCamera(new THREE.Vector2(mx, my), camera); var plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); var pt = new THREE.Vector3(); if (rc.ray.intersectPlane(plane, pt)) { var gx = Math.round(pt.x / GRID_SPACING + (GRID_COLS - 1) / 2), gy = Math.round(pt.z / GRID_SPACING + (GRID_ROWS - 1) / 2); if (gx >= 0 && gx < GRID_COLS && gy >= 0 && gy < GRID_ROWS) return { gx: gx, gy: gy }; } return null; }
-function triggerRoll(die, dir) { animationLock = true; var turn = gameMode === 'battle' ? 'player' : null; battleCurrentTurn = turn; die.roll(dir, function() { battleCurrentTurn = turn; evaluateRollChain(die); checkAllMatches(); animationLock = false; if (gameMode === 'puzzle') decrementPuzzleMove(); }); }
-function triggerSlide(die, dir) { animationLock = true; var turn = gameMode === 'battle' ? 'player' : null; battleCurrentTurn = turn; die.slide(dir, function() { battleCurrentTurn = turn; evaluateRollChain(die); checkAllMatches(); animationLock = false; if (gameMode === 'puzzle') decrementPuzzleMove(); }); }
+function triggerRoll(die, dir) { animationLock = true; var turn = gameMode === 'battle' ? 'player' : null; battleCurrentTurn = turn; die.roll(dir, function() { battleCurrentTurn = turn; evaluateRollChain(die); checkAllMatches(); animationLock = false; if (gameMode === 'battle') battleCurrentTurn = null; if (gameMode === 'puzzle') decrementPuzzleMove(); }); }
+function triggerSlide(die, dir) { animationLock = true; var turn = gameMode === 'battle' ? 'player' : null; battleCurrentTurn = turn; die.slide(dir, function() { battleCurrentTurn = turn; evaluateRollChain(die); checkAllMatches(); animationLock = false; if (gameMode === 'battle') battleCurrentTurn = null; if (gameMode === 'puzzle') decrementPuzzleMove(); }); }
 function handleKeyboard(e) { if (gameState !== 'playing') return; if (gameMode === 'battle' && Date.now() < battlePlayerFrozenUntil) return; var k = e.key.toLowerCase(); if (k === 'p' || k === 'escape') { pauseGame(); return; } var dir = null; if (k === 'arrowup' || k === 'w') dir = 'north'; else if (k === 'arrowdown' || k === 's') dir = 'south'; else if (k === 'arrowleft' || k === 'a') dir = 'west'; else if (k === 'arrowright' || k === 'd') dir = 'east'; else return; var die = findRollableDie(); if (die) triggerRoll(die, dir); }
 function findRollableDie() { var cx = Math.floor(GRID_COLS / 2), cy = Math.floor(GRID_ROWS / 2); for (var r = 0; r < Math.max(GRID_COLS, GRID_ROWS); r++) for (var dx = -r; dx <= r; dx++) for (var dy = -r; dy <= r; dy++) { if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue; var x = cx + dx, y = cy + dy; if (x >= 0 && x < GRID_COLS && y >= 0 && y < GRID_ROWS) { var die = grid[x][y]; if (die && die.state === 'normal' && die.cellType === CELL_TYPE.ACTIVE) return die; } } return null; }
 function showGestureHint(txt) { var h = document.getElementById('gesture-hint'); document.getElementById('hint-text').innerText = txt; h.classList.remove('gesture-hide'); }
@@ -463,14 +521,20 @@ function initZenEffects() {
 
 function startZenFireworks() {
     stopZenFireworks();
+    // In seeded (playtester) mode, delay bursts so regression screenshots
+    // are captured against a clean background.
+    var seeded = /[?&]seed=/.test(window.location.search);
     zenFireworkTimerId = setTimeout(function tick() {
-        if (gameMode !== 'zen' || gameState !== 'playing') return;
-        spawnZenBurst();
-        // Occasionally spawn 2-3 bursts at once for dramatic effect
-        if (Math.random() < 0.3) { setTimeout(function() { spawnZenBurst(); }, 150 + Math.random() * 250); }
-        if (Math.random() < 0.15) { setTimeout(function() { spawnZenBurst(); }, 300 + Math.random() * 300); }
+        if (gameMode !== 'zen') return;
+        if (gameState === 'playing') {
+            spawnZenBurst();
+            // Occasionally spawn 2-3 bursts at once for dramatic effect
+            if (Math.random() < 0.3) { setTimeout(function() { spawnZenBurst(); }, 150 + Math.random() * 250); }
+            if (Math.random() < 0.15) { setTimeout(function() { spawnZenBurst(); }, 300 + Math.random() * 300); }
+        }
+        // Always reschedule so fireworks resume after a pause.
         zenFireworkTimerId = setTimeout(tick, 1200 + Math.random() * 2000);
-    }, 500 + Math.random() * 1000);
+    }, seeded ? 60000 : 500 + Math.random() * 1000);
 }
 
 function stopZenFireworks() {
@@ -699,7 +763,7 @@ function hideStageClearBanner() {
 function setupBattleMode() { clearAllDice(); battlePlayerScore = 0; battleAiScore = 0; battleTimeRemaining = battleDuration; battleCurrentTurn = null; battlePlayerFrozenUntil = 0; battleAiFrozenUntil = 0; comboCount = 0; if (battleTimerId) { clearInterval(battleTimerId); battleTimerId = null; } battleTimerId = setInterval(function() { if (gameState !== 'playing' || gameMode !== 'battle') return; battleTimeRemaining--; updateBattleHUD(); if (battleTimeRemaining <= 0) triggerGameOver(); }, 1000); populateInitialBoard(); startSpawning(); startAITicks(); updateBattleHUD(); }
 function stopAITicks() { if (aiTickInterval) { clearInterval(aiTickInterval); aiTickInterval = null; } }
 function stopBattleTimer() { if (battleTimerId) { clearInterval(battleTimerId); battleTimerId = null; } }
-function startAITicks() { stopAITicks(); var rates = { easy: 1200, medium: 800, hard: 500 }, interval = rates[aiDifficulty] || 800; aiTickInterval = setInterval(function() { if (gameState !== 'playing' || gameMode !== 'battle') return; if (Date.now() < battleAiFrozenUntil) return; var bestMove = aiFindBestMove(); if (bestMove) { var turn = 'ai'; battleCurrentTurn = turn; if (bestMove.isRoll) bestMove.die.roll(bestMove.direction, function() {}); else bestMove.die.slide(bestMove.direction, function() {}); setTimeout(function() { if (gameState === 'playing' && gameMode === 'battle') { battleCurrentTurn = turn; checkAllMatches(); } }, ROLL_DURATION + 50); } }, interval); }
+function startAITicks() { stopAITicks(); var rates = { easy: 1200, medium: 800, hard: 500 }, interval = rates[aiDifficulty] || 800; aiTickInterval = setInterval(function() { if (gameState !== 'playing' || gameMode !== 'battle') return; if (Date.now() < battleAiFrozenUntil || animationLock) return; var bestMove = aiFindBestMove(); if (bestMove) { var turn = 'ai'; battleCurrentTurn = turn; var die = bestMove.die, dir = bestMove.direction, isRoll = bestMove.isRoll; animationLock = true; if (isRoll) die.roll(dir, function() {}); else die.slide(dir, function() {}); var moved = die.state === 'rolling' || die.state === 'sliding'; setTimeout(function() { if (gameState === 'playing' && gameMode === 'battle' && moved) { battleCurrentTurn = turn; checkAllMatches(); } animationLock = false; if (gameMode === 'battle') battleCurrentTurn = null; }, ROLL_DURATION + 50); } }, interval); }
 function aiFindBestMove() { var bestScore = -Infinity, bestMove = null; for (var x = 0; x < GRID_COLS; x++) for (var y = 0; y < GRID_ROWS; y++) { var die = grid[x][y]; if (!die || die.state !== 'normal' || die.cellType !== CELL_TYPE.ACTIVE) continue; var directions = ['north', 'south', 'east', 'west']; for (var di = 0; di < directions.length; di++) { var dir = directions[di], d = DIRECTIONS[dir], nx = x + d.dx, ny = y + d.dy; if (nx < 0 || nx >= GRID_COLS || ny < 0 || ny >= GRID_ROWS) continue; if (grid[nx][ny] === null) { var s = aiScoreMove(die, dir, true); if (s > bestScore) { bestScore = s; bestMove = { die: die, direction: dir, isRoll: true }; } var s2 = aiScoreMove(die, dir, false); if (s2 > bestScore) { bestScore = s2; bestMove = { die: die, direction: dir, isRoll: false }; } } } } return bestMove; }
 function aiScoreMove(die, dir, isRoll) { var s = 0, d = DIRECTIONS[dir], tx = die.gridX + d.dx, ty = die.gridY + d.dy, cv = die.faces.top; for (var dx = -2; dx <= 2; dx++) for (var dy = -2; dy <= 2; dy++) { var sx = tx + dx, sy = ty + dy; if (sx >= 0 && sx < GRID_COLS && sy >= 0 && sy < GRID_ROWS) { var n = grid[sx][sy]; if (n && n.state === 'normal' && n.cellType === CELL_TYPE.ACTIVE) { if (n.faces.top === cv) s += 30; if (n.faces.top === 1) s += 15; } } } if (cv >= 3) s += cv * 10; for (var gi = 0; gi < activeSinkingGroups.length; gi++) { var group = activeSinkingGroups[gi]; for (var gdi = 0; gdi < group.diceList.length; gdi++) { var gd = group.diceList[gdi], dist = Math.abs(gd.gridX - tx) + Math.abs(gd.gridY - ty); if (dist <= 2) s += 20; } } return s + Math.random() * 10; }
 function updateBattleHUD() {
@@ -725,8 +789,9 @@ function updateFreezeDisplay() {
 }
 
 function updateScoreDisplay() { document.getElementById('hud-score').innerText = String(score).padStart(7, '0'); document.getElementById('hud-highscore').innerText = String(highScore).padStart(7, '0'); }
-function updateFullnessBar(pct) { var bar = document.getElementById('capacity-bar'), warning = document.getElementById('capacity-warning'); bar.style.width = Math.min(pct * 100, 100) + '%'; if (pct >= 0.8) { warning.classList.add('danger-alarm'); bar.style.boxShadow = '0 0 10px #ff3366'; } else { warning.classList.remove('danger-alarm'); bar.style.boxShadow = 'none'; } }
+function updateFullnessBar(pct) { pct = Math.min(pct * 100, 100); if (pct === lastFullnessPct) return; lastFullnessPct = pct; var bar = document.getElementById('capacity-bar'), warning = document.getElementById('capacity-warning'); bar.style.width = pct + '%'; if (pct >= 80) { warning.classList.add('danger-alarm'); bar.style.boxShadow = '0 0 10px #ff3366'; } else { warning.classList.remove('danger-alarm'); bar.style.boxShadow = 'none'; } }
 var comboTmrId = null;
+var lastFullnessPct = -1;
 function showComboBanner() { var banner = document.getElementById('combo-display'); document.getElementById('combo-count').innerText = comboCount.toString(); banner.classList.remove('combo-hide'); if (comboTmrId) clearTimeout(comboTmrId); comboTmrId = setTimeout(function() { banner.classList.add('combo-hide'); }, 2500); }
 function hideComboBanner() { document.getElementById('combo-display').classList.add('combo-hide'); }
 
@@ -766,3 +831,16 @@ Object.defineProperty(window, 'autoGameState', { get: function() {
     };
 } });
 Object.defineProperty(window, 'currentFPS', { get: function() { return _currentFPS; } });
+Object.defineProperty(window, 'gridToScreen', { get: function() {
+    return function(gx, gy) {
+        if (!camera || !renderer) return { x: 0, y: 0 };
+        var wx = (gx - (GRID_COLS - 1) / 2) * GRID_SPACING;
+        var wz = (gy - (GRID_ROWS - 1) / 2) * GRID_SPACING;
+        var v = new THREE.Vector3(wx, DIE_SCALE / 2, wz).project(camera);
+        var rect = renderer.domElement.getBoundingClientRect();
+        return {
+            x: rect.left + (v.x * 0.5 + 0.5) * rect.width,
+            y: rect.top + (-(v.y * 0.5) + 0.5) * rect.height
+        };
+    };
+} });

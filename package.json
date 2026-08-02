@@ -1,0 +1,15 @@
+{
+  "name": "devil-dice-3d",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Devil Dice 3D - self-contained Three.js dice puzzle with a headless playtester",
+  "scripts": {
+    "playtest": "node tests/playtester.js",
+    "baseline": "node tests/playtester.js --baseline"
+  },
+  "dependencies": {
+    "canvas": "^3.0.0",
+    "pixelmatch": "^6.0.0",
+    "puppeteer": "^25.1.0"
+  }
+}

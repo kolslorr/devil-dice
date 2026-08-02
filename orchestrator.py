@@ -6,14 +6,15 @@ Coordinates the self-improvement loop:
 
   1. Read the backlog from issues/
   2. Delegate code changes to the Architect (prints instructions for the AI)
-  3. Serve the game locally
-  4. Run the headless Playtester (Puppeteer)
-  5. Analyze results as the Critic
-  6. Write issues or merge decisions
-  7. Repeat
+  3. Optionally apply the Architect's patch on ai-bot-dev (--apply-patch)
+  4. Serve the game locally
+  5. Run the headless Playtester (Puppeteer)
+  6. Analyze results as the Critic
+  7. Commit/merge on pass, roll back on failure, write issues as needed
+  8. Repeat
 
 Usage:
-  python3 orchestrator.py [--mode cycle|once] [--architect-message "msg"]
+  python3 orchestrator.py [--mode cycle|once|baseline] [--architect-message "msg"] [--apply-patch patch.diff]
 """
 
 import argparse
@@ -53,7 +54,7 @@ def read_backlog():
     # Find the most recent unresolved issue
     for issue_path in issues:
         content = issue_path.read_text()
-        if "[STATUS: OPEN]" in content or "[STATUS: OPEN]" not in content:
+        if "[STATUS: OPEN]" in content:
             return {"path": issue_path, "content": content}
     return None
 
@@ -75,6 +76,7 @@ status: OPEN
 ## Diagnostics
 - Timestamp: {timestamp}
 - Severity: {severity}
+- [STATUS: OPEN]
 """
     path = ISSUES_DIR / fname
     path.write_text(content)
@@ -84,10 +86,11 @@ status: OPEN
 # ── Phase 2: Architect prompt ──
 def build_architect_prompt(backlog=None, feature_request=None):
     """Build the prompt for the Architect agent (DeepSeek V4 Pro)."""
+    line_count = len(GAME_JS.read_text().splitlines())
     prompt_parts = [
         "# Architect Task: Improve Devil Dice 3D\n",
         f"**Working directory:** `{ROOT}`\n",
-        "**File to edit:** `game.js` (single-file Three.js game engine, ~540 lines)\n",
+        f"**File to edit:** `game.js` (single-file Three.js game engine, {line_count} lines)\n",
         "**Constraints:**\n",
         "- Return ONLY the modified code block(s) — no explanations outside the code\n",
         "- Do NOT remove or break the `window.autoGameState` and `window.currentFPS` automation hooks\n",
@@ -219,32 +222,67 @@ def critic_analyze(playtest_result):
 
 
 # ── Git helpers ──
+def git_run(*args):
+    return subprocess.run(list(args), cwd=ROOT, capture_output=True, text=True)
+
 def git_current_branch():
-    result = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                          capture_output=True, text=True, cwd=ROOT)
+    result = git_run("git", "rev-parse", "--abbrev-ref", "HEAD")
     return result.stdout.strip()
 
+def git_branch_exists(name):
+    return git_run("git", "rev-parse", "--verify", name).returncode == 0
+
+def git_ensure_branch(name):
+    """Check out branch `name`, creating it from the current HEAD if needed."""
+    if git_branch_exists(name):
+        git_run("git", "checkout", name)
+    else:
+        git_run("git", "checkout", "-b", name)
+
+def git_apply(patch_path):
+    """Apply a unified diff produced by the Architect. Returns True on success."""
+    patch = Path(patch_path)
+    if not patch.exists():
+        print(f"  [Git] Patch file not found: {patch}")
+        return False
+    check = git_run("git", "apply", "--check", str(patch))
+    if check.returncode != 0:
+        print(f"  [Git] Patch does not apply cleanly:\n{check.stderr[:500]}")
+        return False
+    result = git_run("git", "apply", str(patch))
+    if result.returncode != 0:
+        print(f"  [Git] Patch application failed:\n{result.stderr[:500]}")
+        return False
+    print(f"  [Git] Patch applied: {patch}")
+    return True
+
 def git_commit(message):
-    subprocess.run(["git", "add", "-A"], cwd=ROOT, capture_output=True)
-    result = subprocess.run(["git", "commit", "-m", message], cwd=ROOT, capture_output=True, text=True)
+    git_run("git", "add", "-A")
+    result = git_run("git", "commit", "-m", message)
     return result.returncode == 0
 
 def git_merge():
-    subprocess.run(["git", "checkout", "gesture-nav"], cwd=ROOT, capture_output=True)
-    result = subprocess.run(["git", "merge", "ai-bot-dev", "--no-edit"], cwd=ROOT, capture_output=True, text=True)
-    if result.returncode == 0:
-        subprocess.run(["git", "branch", "-D", "ai-bot-dev"], cwd=ROOT, capture_output=True)
-        subprocess.run(["git", "checkout", "-b", "ai-bot-dev"], cwd=ROOT, capture_output=True)
-        return True
-    return False
+    """Merge ai-bot-dev into gesture-nav, then recreate ai-bot-dev from the merge."""
+    git_ensure_branch("gesture-nav")
+    result = git_run("git", "merge", "ai-bot-dev", "--no-edit")
+    if result.returncode != 0:
+        print(f"  [Git] Merge failed:\n{result.stderr[:500]}")
+        return False
+    git_run("git", "branch", "-D", "ai-bot-dev")
+    git_run("git", "checkout", "-b", "ai-bot-dev")
+    return True
 
-def git_rollback():
-    """Roll back the last commit on ai-bot-dev."""
-    subprocess.run(["git", "reset", "--hard", "HEAD~1"], cwd=ROOT, capture_output=True)
+def git_discard_changes():
+    """Discard uncommitted working-tree changes (the failed patch)."""
+    result = git_run("git", "restore", ".")
+    if result.returncode != 0:
+        # Fallback for older git versions
+        result = git_run("git", "checkout", "--", ".")
+    return result.returncode == 0
 
 
 # ── Main orchestrator loop ──
-def run_cycle(feature_request=None, mode="cycle"):
+def run_cycle(feature_request=None, mode="cycle", patch_path=None):
     """Run one full Architect → Playtest → Critic cycle."""
     print(f"\n{'='*60}")
     print(f"  ORCHESTRATOR CYCLE — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -267,6 +305,22 @@ def run_cycle(feature_request=None, mode="cycle"):
     arch_prompt_path = TEST_OUTPUT / f"architect_prompt_{int(time.time())}.md"
     arch_prompt_path.write_text(architect_prompt)
     print(f"  Saved to: {arch_prompt_path}")
+
+    # Phase 2.5: Apply the Architect's patch (if supplied) on the dev branch
+    patch_applied = False
+    if patch_path:
+        print("\n[Phase 2.5] Applying Architect patch...")
+        git_ensure_branch("ai-bot-dev")
+        if git_apply(patch_path):
+            patch_applied = True
+        else:
+            print("  ❌ Patch could not be applied; aborting cycle.")
+            return {
+                "status": "patch-failed",
+                "architect_prompt_path": str(arch_prompt_path),
+                "critic_report": "Patch failed to apply cleanly.",
+                "playtest_result": {"passed": False, "errors": ["git apply rejected the patch"]},
+            }
 
     # Phase 3: Start server
     print("\n[Phase 3] Starting HTTP server on port 8000...")
@@ -302,22 +356,39 @@ def run_cycle(feature_request=None, mode="cycle"):
     # Decision
     if playtest_result["passed"]:
         print("\n  ✅ PLAYTEST PASSED — Code is stable")
-        # Mark the issue as resolved if there was one
-        if backlog:
-            resolved_path = backlog["path"]
-            content = resolved_path.read_text()
-            content = content.replace("status: OPEN", "status: RESOLVED")
-            resolved_path.write_text(content)
-            print(f"  Issue marked RESOLVED: {resolved_path.name}")
+        result_status = "passed"
+        if patch_applied:
+            label = backlog["path"].stem if backlog else "optimization"
+            if git_commit(f"Orchestrator: applied architect fix ({label})"):
+                print("  ✅ Committed to ai-bot-dev")
+                if git_merge():
+                    print("  ✅ Merged into gesture-nav")
+                    result_status = "merged"
+            # Mark the issue resolved only when a change was actually
+            # applied AND verified by the playtest.
+            if backlog:
+                resolved_path = backlog["path"]
+                content = resolved_path.read_text()
+                content = content.replace("[STATUS: OPEN]", "[STATUS: RESOLVED]")
+                content = content.replace("status: OPEN", "status: RESOLVED")
+                resolved_path.write_text(content)
+                print(f"  Issue marked RESOLVED: {resolved_path.name}")
+        elif backlog:
+            print("  ⚠️  No patch supplied — baseline verification only; issue NOT marked resolved")
 
         result = {
-            "status": "passed",
+            "status": result_status,
+            "patch_applied": patch_applied,
             "architect_prompt_path": str(arch_prompt_path),
             "critic_report": critic_report,
             "playtest_result": playtest_result,
         }
     else:
         print("\n  ❌ PLAYTEST FAILED — Issues detected")
+        if patch_applied:
+            print("  ↩️  Discarding the applied patch...")
+            if git_discard_changes():
+                print("  ✅ Patch discarded")
         # Write a new issue
         error_summary = "; ".join(playtest_result["errors"][:3] if playtest_result["errors"] else playtest_result["warnings"][:3])
         issue_path = write_issue(
@@ -329,6 +400,7 @@ def run_cycle(feature_request=None, mode="cycle"):
 
         result = {
             "status": "failed",
+            "patch_applied": patch_applied,
             "issue_path": str(issue_path),
             "critic_report": critic_report,
             "playtest_result": playtest_result,
@@ -344,35 +416,31 @@ if __name__ == "__main__":
                        help="cycle=run continuous loop, once=single pass, baseline=capture golden screenshot")
     parser.add_argument("--architect-message", type=str, default=None,
                        help="Feature request or bug fix description for the Architect")
+    parser.add_argument("--apply-patch", type=str, default=None,
+                       help="Path to a unified diff produced by the Architect to apply before playtesting")
     args = parser.parse_args()
 
     if args.mode == "baseline":
         print("📸 Capturing golden master baseline screenshot...")
         server = start_server()
         try:
-            # Use Puppeteer to capture a clean baseline
-            subprocess.run(
-                [NODE, "-e", """
-                    import('puppeteer').then(async p => {
-                        const browser = await p.launch({ headless: 'new', args: ['--no-sandbox'] });
-                        const page = await browser.newPage();
-                        await page.setViewport({ width: 450, height: 850, isMobile: true });
-                        await page.goto('http://localhost:8000', { waitUntil: 'networkidle0' });
-                        await page.waitForSelector('#zen-btn');
-                        await page.screenshot({ path: 'golden/baseline.png', fullPage: false });
-                        console.log('Baseline captured: golden/baseline.png');
-                        await browser.close();
-                    });
-                """],
-                capture_output=True, text=True, timeout=30, cwd=ROOT
+            # Capture the baseline at the same deterministic, settled,
+            # in-game state that the playtester screenshots for comparison.
+            result = subprocess.run(
+                [NODE, str(PLAYTESTER), "--baseline", "--golden=golden/baseline.png", "--port=8000"],
+                capture_output=True, text=True, timeout=60, cwd=ROOT
             )
+            if result.returncode == 0:
+                print("  Baseline captured: golden/baseline.png")
+            else:
+                print(f"  Baseline capture FAILED:\n{result.stdout[:500]}\n{result.stderr[:500]}")
         finally:
             server.terminate()
             server.wait()
         print("Done.")
 
     elif args.mode == "once":
-        result = run_cycle(feature_request=args.architect_message, mode="once")
+        result = run_cycle(feature_request=args.architect_message, mode="once", patch_path=args.apply_patch)
         print(f"\n{'='*60}")
         print(f"  CYCLE RESULT: {result['status'].upper()}")
         print(f"{'='*60}")
@@ -384,7 +452,7 @@ if __name__ == "__main__":
             while True:
                 cycle_count += 1
                 print(f"\n  ─── Cycle #{cycle_count} ───")
-                result = run_cycle(mode="cycle")
+                result = run_cycle(mode="cycle", patch_path=args.apply_patch)
                 print(f"\n  Cycle #{cycle_count} result: {result['status'].upper()}")
                 time.sleep(5)
         except KeyboardInterrupt:
