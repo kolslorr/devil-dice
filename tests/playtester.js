@@ -129,10 +129,14 @@ async function runPlaytest() {
     RESULTS.errors.push('PAGE_ERROR: ' + err.message);
   });
 
-  // Navigate to the game with a deterministic seed
+  // Navigate to the game with a deterministic seed.
+  // NOTE: waitUntil 'networkidle0' never fires for this game — the renderer
+  // main thread is saturated by per-frame WebGL on SwiftShader, which starves
+  // Chrome's networkIdle lifecycle event even though the network is genuinely
+  // idle. 'load' fires reliably; readiness is gated by #zen-btn below.
   const baseUrl = `http://localhost:${ARGS.port}`;
   const url = `${baseUrl}/?seed=${SEED}`;
-  await page.goto(url, { waitUntil: 'networkidle0', timeout: 15000 });
+  await page.goto(url, { waitUntil: 'load', timeout: 15000 });
   await page.waitForSelector('#zen-btn', { timeout: 5000 });
 
   // Start Zen mode
