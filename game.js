@@ -71,8 +71,12 @@ var audioCtx = null, bgmGain = null, bgmIntervalId = null, menuMusicIntervalId =
 var textureCache = {}, materialsCache = {};
 // ── Zen mode background effects ──
 var zenAmbientParticles = null, zenFireworkBursts = [], zenFireworkTimerId = null;
+var zenFireworkTimeouts = [];
 var ZEN_FIREWORK_COLORS = [0xff3366, 0x33ccff, 0x66ff33, 0xffcc00, 0xcc66ff, 0xff8844, 0x44ffaa, 0xff66aa];
-var ZEN_AMBIENT_COUNT = 200, zenAmbientPhase = 0;
+var ZEN_AMBIENT_COUNT = 320, zenAmbientPhase = 0, zenAmbientPulse = 0;
+// ── AI battle move marker (gold ring + arrow on the die the AI moves) ──
+var aiMoveMarker = null, aiMarkerDie = null, aiMarkerUntil = 0;
+var AI_MARKER_COLOR = 0xffcc00, AI_MARKER_DURATION = 1100;
 
 var AudioEngine = {
     init: function() { if (audioCtx) return; try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) {} },
@@ -438,7 +442,7 @@ function checkAllMatches() {
 
 function evaluateRollChain(rolledDie) { if (rolledDie.state !== 'normal') return; var rx = rolledDie.gridX, ry = rolledDie.gridY, rv = rolledDie.faces.top; var neighbors = [[rx + 1, ry], [rx - 1, ry], [rx, ry + 1], [rx, ry - 1]]; for (var ni = 0; ni < neighbors.length; ni++) { var nx = neighbors[ni][0], ny = neighbors[ni][1]; if (nx >= 0 && nx < GRID_COLS && ny >= 0 && ny < GRID_ROWS) { var nd = grid[nx][ny]; if (nd && nd.state === 'sinking') { var group = activeSinkingGroups.find(function(g) { return g.id === nd.sinkingGroup; }); if (group) { if (rv === group.diceValue && rv !== 1) { addDieToSinkingGroup(rolledDie, group); return; } else if (rv === 1) { addDieToSinkingGroup(rolledDie, group); return; } } } } } }
 
-function addDieToSinkingGroup(die, group) { die.startSinking(group.id); group.diceList.push(die); group.lastActivity = Date.now(); group.diceList.forEach(function(d) { d.sinkingTimer = Date.now(); }); comboCount++; showComboBanner(); var comboPoints = comboCount * 250; battleAwardScore(comboPoints); battleFreezeOpponent(comboCount, group.diceValue); AudioEngine.playCombo(comboCount); var cwx = (die.gridX - (GRID_COLS - 1) / 2) * GRID_SPACING, cwz = (die.gridY - (GRID_ROWS - 1) / 2) * GRID_SPACING; spawnZenBurst(cwx, 0.4, cwz, ZEN_FIREWORK_COLORS[comboCount % ZEN_FIREWORK_COLORS.length]); createFloatingScore(die.gridX, die.gridY, 'COMBO +' + comboPoints); checkOnesChaining(); }
+function addDieToSinkingGroup(die, group) { die.startSinking(group.id); group.diceList.push(die); group.lastActivity = Date.now(); group.diceList.forEach(function(d) { d.sinkingTimer = Date.now(); }); comboCount++; showComboBanner(); var comboPoints = comboCount * 250; battleAwardScore(comboPoints); battleFreezeOpponent(comboCount, group.diceValue); AudioEngine.playCombo(comboCount); var cwx = (die.gridX - (GRID_COLS - 1) / 2) * GRID_SPACING, cwz = (die.gridY - (GRID_ROWS - 1) / 2) * GRID_SPACING; spawnZenBurst(cwx, 0.4, cwz, ZEN_FIREWORK_COLORS[comboCount % ZEN_FIREWORK_COLORS.length]); if (comboCount >= 2) triggerComboFireworks(comboCount, cwx, cwz); createFloatingScore(die.gridX, die.gridY, 'COMBO +' + comboPoints); checkOnesChaining(); }
 
 function checkOnesChaining() { var chainedAny = false; for (var x = 0; x < GRID_COLS; x++) for (var y = 0; y < GRID_ROWS; y++) { var die = grid[x][y]; if (die && die.state === 'normal' && die.cellType === CELL_TYPE.ACTIVE && die.faces.top === 1) { var neighbors = [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]]; for (var ni = 0; ni < neighbors.length; ni++) { var nx = neighbors[ni][0], ny = neighbors[ni][1]; if (nx >= 0 && nx < GRID_COLS && ny >= 0 && ny < GRID_ROWS) { var nd = grid[nx][ny]; if (nd && nd.state === 'sinking') { var group = activeSinkingGroups.find(function(g) { return g.id === nd.sinkingGroup; }); if (group) { addDieToSinkingGroup(die, group); chainedAny = true; break; } } } } } } if (chainedAny) checkOnesChaining(); }
 
@@ -469,11 +473,11 @@ function findRollableDie() { var cx = Math.floor(GRID_COLS / 2), cy = Math.floor
 function showGestureHint(txt) { var h = document.getElementById('gesture-hint'); document.getElementById('hint-text').innerText = txt; h.classList.remove('gesture-hide'); }
 function hideGestureHint() { document.getElementById('gesture-hint').classList.add('gesture-hide'); }
 
-function startGame(mode) { AudioEngine.stopMenuMusic(); mode = mode || 'zen'; AudioEngine.init(); gameState = 'playing'; gameMode = mode; score = 0; comboCount = 0; animationLock = false; updateScoreDisplay(); hideComboBanner(); hideGestureHint(); document.getElementById('menu-screen').classList.remove('active'); document.getElementById('pause-screen').classList.remove('active'); document.getElementById('gameover-screen').classList.remove('active'); document.getElementById('hud-screen').classList.add('active'); document.getElementById('puzzle-hud').style.display = (mode === 'puzzle') ? 'flex' : 'none'; document.getElementById('battle-hud').style.display = (mode === 'battle') ? 'flex' : 'none'; document.getElementById('hud-screen').classList.toggle('hide-highscore', mode === 'battle'); document.getElementById('battle-timer-box').style.display = (mode === 'battle') ? 'block' : 'none'; if (mode === 'puzzle') setupPuzzleMode(); else if (mode === 'battle') setupBattleMode();    else { populateInitialBoard(); startSpawning(); initZenEffects(); } if (musicEnabled) { AudioEngine.stopBGM(); AudioEngine.startBGM(); } updateFullnessBar(countActiveDice() / totalCells); }
+function startGame(mode) { AudioEngine.stopMenuMusic(); mode = mode || 'zen'; AudioEngine.init(); gameState = 'playing'; gameMode = mode; score = 0; comboCount = 0; animationLock = false; hideAiMoveMarker(); updateScoreDisplay(); hideComboBanner(); hideGestureHint(); document.getElementById('menu-screen').classList.remove('active'); document.getElementById('pause-screen').classList.remove('active'); document.getElementById('gameover-screen').classList.remove('active'); document.getElementById('hud-screen').classList.add('active'); document.getElementById('puzzle-hud').style.display = (mode === 'puzzle') ? 'flex' : 'none'; document.getElementById('battle-hud').style.display = (mode === 'battle') ? 'flex' : 'none'; document.getElementById('hud-screen').classList.toggle('hide-highscore', mode === 'battle'); document.getElementById('battle-timer-box').style.display = (mode === 'battle') ? 'block' : 'none'; if (mode === 'puzzle') setupPuzzleMode(); else if (mode === 'battle') setupBattleMode();    else { populateInitialBoard(); startSpawning(); initZenEffects(); } if (musicEnabled) { AudioEngine.stopBGM(); AudioEngine.startBGM(); } updateFullnessBar(countActiveDice() / totalCells); }
 function startSpawning() { stopSpawning(); spawnTimerId = setTimeout(spawnRandomDie, DIFFICULTY_SETTINGS[selectedDifficulty].spawnInterval); }
 function pauseGame() { if (gameState !== 'playing') return; gameState = 'paused'; stopSpawning(); AudioEngine.stopBGM(); document.getElementById('hud-screen').classList.remove('active'); document.getElementById('pause-screen').classList.add('active'); }
 function resumeGame() { if (gameState !== 'paused') return; gameState = 'playing'; document.getElementById('pause-screen').classList.remove('active'); document.getElementById('hud-screen').classList.add('active'); if (gameMode !== 'puzzle') startSpawning(); if (musicEnabled) AudioEngine.startBGM(); }
-function quitToMenu() { gameState = 'menu'; clearZenEffects(); AudioEngine.startMenuMusic(); stopSpawning(); AudioEngine.stopBGM(); if (gameMode === 'battle') { stopAITicks(); stopBattleTimer(); } document.getElementById('pause-screen').classList.remove('active'); document.getElementById('gameover-screen').classList.remove('active'); document.getElementById('hud-screen').classList.remove('active'); document.getElementById('hud-screen').classList.remove('hide-highscore'); document.getElementById('battle-timer-box').style.display = 'none'; document.getElementById('menu-screen').classList.add('active'); document.getElementById('menu-highscore').innerText = Number(highScore).toLocaleString(); clearAllDice(); }
+function quitToMenu() { gameState = 'menu'; hideAiMoveMarker(); clearZenEffects(); AudioEngine.startMenuMusic(); stopSpawning(); AudioEngine.stopBGM(); if (gameMode === 'battle') { stopAITicks(); stopBattleTimer(); } document.getElementById('pause-screen').classList.remove('active'); document.getElementById('gameover-screen').classList.remove('active'); document.getElementById('hud-screen').classList.remove('active'); document.getElementById('hud-screen').classList.remove('hide-highscore'); document.getElementById('battle-timer-box').style.display = 'none'; document.getElementById('menu-screen').classList.add('active'); document.getElementById('menu-highscore').innerText = Number(highScore).toLocaleString(); clearAllDice(); }
 function clearAllDice() { for (var x = 0; x < GRID_COLS; x++) for (var y = 0; y < GRID_ROWS; y++) { if (grid[x] && grid[x][y]) { diceGroup.remove(grid[x][y].pivotGroup); grid[x][y].mesh.geometry.dispose(); } if (sinkingHighlights[x] && sinkingHighlights[x][y]) sinkingHighlights[x][y].visible = false; } grid = Array(GRID_COLS).fill(null).map(function() { return Array(GRID_ROWS).fill(null); }); activeSinkingGroups = []; }
 
 // ── Zen mode background effects (Tetris Effect style fireworks) ──
@@ -483,110 +487,233 @@ function initZenEffects() {
         worldGroup.remove(zenAmbientParticles);
         zenAmbientParticles.geometry.dispose();
         zenAmbientParticles.material.dispose();
+        zenAmbientParticles = null;
     }
     var positions = new Float32Array(ZEN_AMBIENT_COUNT * 3);
-    var sizes = new Float32Array(ZEN_AMBIENT_COUNT);
     var colors = new Float32Array(ZEN_AMBIENT_COUNT * 3);
     for (var i = 0; i < ZEN_AMBIENT_COUNT; i++) {
         positions[i*3] = (Math.random() - 0.5) * 24;
         positions[i*3+1] = (Math.random() - 0.3) * 16;
-        positions[i*3+2] = -1 - Math.random() * 3;
-        sizes[i] = 0.03 + Math.random() * 0.08;
-        var c = new THREE.Color(ZEN_FIREWORK_COLORS[Math.floor(Math.random() * ZEN_FIREWORK_COLORS.length)]);
-        colors[i*3] = c.r; colors[i*3+1] = c.g; colors[i*3+2] = c.b;
+        positions[i*3+2] = -0.9 - Math.random() * 3;
+        // 15% white-hot embers make the ambient field brighter and punchier
+        var pc;
+        if (Math.random() < 0.15) {
+            pc = new THREE.Color(1, 1, 1);
+        } else {
+            pc = new THREE.Color(ZEN_FIREWORK_COLORS[Math.floor(Math.random() * ZEN_FIREWORK_COLORS.length)]);
+        }
+        colors[i*3] = pc.r; colors[i*3+1] = pc.g; colors[i*3+2] = pc.b;
     }
     var geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     var mat = new THREE.PointsMaterial({
-        size: 0.4, vertexColors: true, transparent: true, opacity: 0.75,
+        size: 0.5, vertexColors: true, transparent: true, opacity: 0.85,
         blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, sizeAttenuation: true
     });
     zenAmbientParticles = new THREE.Points(geom, mat);
     worldGroup.add(zenAmbientParticles);
-    var vel = [];
+    var vel = [], tw = [];
     for (var j = 0; j < ZEN_AMBIENT_COUNT; j++) {
         vel.push({
-            vx: (Math.random() - 0.5) * 0.003,
-            vy: 0.003 + Math.random() * 0.006,
+            vx: (Math.random() - 0.5) * 0.004,
+            vy: 0.004 + Math.random() * 0.008,
             phase: Math.random() * Math.PI * 2
+        });
+        tw.push({
+            phase: Math.random() * Math.PI * 2,
+            speed: 0.015 + Math.random() * 0.035,
+            base: 0.55 + Math.random() * 0.45
         });
     }
     zenAmbientParticles.userData.velocities = vel;
+    zenAmbientParticles.userData.twinkles = tw;
+    zenAmbientParticles.userData.baseColors = new Float32Array(colors);
     // Clean up old bursts from previous sessions
     zenFireworkBursts.forEach(function(m) { worldGroup.remove(m); m.geometry.dispose(); m.material.dispose(); });
     zenFireworkBursts = [];
+    zenAmbientPulse = 0;
     startZenFireworks();
 }
 
 function startZenFireworks() {
     stopZenFireworks();
-    // In seeded (playtester) mode, delay bursts so regression screenshots
-    // are captured against a clean background.
+    // In seeded (playtester) mode, delay the first burst so regression
+    // screenshots are captured against a clean background, but keep the
+    // delay short enough that background fireworks appear during live play.
     var seeded = /[?&]seed=/.test(window.location.search);
+    var firstDelay = seeded ? 5000 : 400 + Math.random() * 700;
     zenFireworkTimerId = setTimeout(function tick() {
-        if (gameMode !== 'zen') return;
-        if (gameState === 'playing') {
+        if (gameMode === 'zen' && gameState === 'playing') {
             spawnZenBurst();
-            // Occasionally spawn 2-3 bursts at once for dramatic effect
-            if (Math.random() < 0.3) { setTimeout(function() { spawnZenBurst(); }, 150 + Math.random() * 250); }
-            if (Math.random() < 0.15) { setTimeout(function() { spawnZenBurst(); }, 300 + Math.random() * 300); }
+            // Salvo: occasionally fire 2-4 bursts at once for a
+            // screen-filling, rhythmic celebration.
+            if (Math.random() < 0.45) scheduleZenSalvo(120 + Math.random() * 250);
+            if (Math.random() < 0.22) scheduleZenSalvo(250 + Math.random() * 300);
+            if (Math.random() < 0.1) scheduleZenSalvo(350 + Math.random() * 400);
         }
         // Always reschedule so fireworks resume after a pause.
-        zenFireworkTimerId = setTimeout(tick, 1200 + Math.random() * 2000);
-    }, seeded ? 60000 : 500 + Math.random() * 1000);
+        zenFireworkTimerId = setTimeout(tick, 800 + Math.random() * 1000);
+    }, firstDelay);
+}
+
+function scheduleZenSalvo(delay) {
+    zenFireworkTimeouts.push(setTimeout(function() {
+        if (gameMode === 'zen' && gameState === 'playing' && worldGroup) spawnZenBurst();
+    }, delay));
 }
 
 function stopZenFireworks() {
     if (zenFireworkTimerId) { clearTimeout(zenFireworkTimerId); zenFireworkTimerId = null; }
+    zenFireworkTimeouts.forEach(function(id) { clearTimeout(id); });
+    zenFireworkTimeouts = [];
 }
 
-function spawnZenBurst(posX, posY, posZ, forceColor) {
+function pickZenBurstType() {
+    var r = Math.random();
+    if (r < 0.3) return 'peony';
+    if (r < 0.5) return 'ring';
+    if (r < 0.75) return 'willow';
+    return 'double';
+}
+
+function spawnZenBurst(posX, posY, posZ, forceColor, forceType, sizeMult) {
     if (gameMode !== 'zen' || !worldGroup) return;
-    var bx = (typeof posX !== 'undefined') ? posX : (Math.random() - 0.5) * 14;
+    if (zenFireworkBursts.length > 24) return; // safety cap keeps 60 FPS
+    var bx = (typeof posX !== 'undefined') ? posX : (Math.random() - 0.5) * 15;
     var by = (typeof posY !== 'undefined') ? posY : (Math.random() - 0.5) * 8;
-    var bz = (typeof posZ !== 'undefined') ? posZ : -0.5 - Math.random() * 1;
-    var count = 50 + Math.floor(Math.random() * 40);
+    var bz = (typeof posZ !== 'undefined') ? posZ : -0.4 - Math.random() * 1.2;
+    var type = (typeof forceType === 'undefined' || forceType === null) ? pickZenBurstType() : forceType;
+    var mult = (typeof sizeMult === 'undefined' || sizeMult === null) ? 1 : sizeMult;
+    var dualColor = (typeof forceColor === 'undefined' || forceColor === null) && Math.random() < 0.3;
     var color = forceColor || ZEN_FIREWORK_COLORS[Math.floor(Math.random() * ZEN_FIREWORK_COLORS.length)];
+    var color2 = ZEN_FIREWORK_COLORS[Math.floor(Math.random() * ZEN_FIREWORK_COLORS.length)];
+    if (!dualColor) color2 = color;
+
+    var count, speedMin, speedMax, maxLifeMin, maxLifeMax, drag, gravity, matSize;
+    if (type === 'ring') {
+        count = 70 + Math.floor(Math.random() * 30);
+        speedMin = 0.10; speedMax = 0.20;
+        maxLifeMin = 70; maxLifeMax = 110;
+        drag = 0.965; gravity = 0; matSize = 1.0;
+    } else if (type === 'willow') {
+        count = 45 + Math.floor(Math.random() * 20);
+        speedMin = 0.02; speedMax = 0.06;
+        maxLifeMin = 230; maxLifeMax = 300;
+        drag = 0.995; gravity = -0.0025; matSize = 1.1;
+    } else if (type === 'flash') {
+        count = 100 + Math.floor(Math.random() * 40);
+        speedMin = 0.12; speedMax = 0.28;
+        maxLifeMin = 45; maxLifeMax = 70;
+        drag = 0.955; gravity = 0.008; matSize = 1.35;
+    } else { // peony / double-break base
+        count = 75 + Math.floor(Math.random() * 45);
+        speedMin = 0.05; speedMax = 0.16;
+        maxLifeMin = 80; maxLifeMax = 130;
+        drag = 0.962; gravity = 0.004; matSize = 1.0;
+    }
+    var ringRadius = (type === 'ring' ? (1.8 + Math.random() * 0.9) : 0) * Math.min(3.0, mult);
+
     var positions = new Float32Array(count * 3);
     var colors = new Float32Array(count * 3);
     var velocities = [];
     var baseC = new THREE.Color(color);
+    var baseC2 = new THREE.Color(color2);
     for (var i = 0; i < count; i++) {
         positions[i*3] = bx; positions[i*3+1] = by; positions[i*3+2] = bz;
-        var angleH = Math.random() * Math.PI * 2;
-        var angleV = (Math.random() - 0.5) * Math.PI * 0.8;
-        var speed = 0.04 + Math.random() * 0.08;
-        // Mix in white for brighter core particles
         var brightness = 0.5 + Math.random() * 0.5;
         var pc;
-        if (Math.random() < 0.15) {
-            // 15% white sparks (the 'pop' in firework)
+        if (Math.random() < 0.15) { // ~15% white-hot core sparks for pop
             pc = new THREE.Color(1, 1, 1);
+        } else if (dualColor && Math.random() < 0.5) {
+            pc = baseC2.clone().multiplyScalar(brightness);
         } else {
             pc = baseC.clone().multiplyScalar(brightness);
         }
         colors[i*3] = pc.r; colors[i*3+1] = pc.g; colors[i*3+2] = pc.b;
-        velocities.push({
-            vx: Math.cos(angleH) * Math.cos(angleV) * speed,
-            vy: Math.sin(angleV) * speed + 0.025,
-            vz: Math.sin(angleH) * Math.cos(angleV) * speed,
-            life: 0, maxLife: 60 + Math.random() * 70
-        });
+        var vx = 0, vy = 0, vz = 0;
+        if (type === 'ring') {
+            // Expanding halo: particles start on the ring and fly outward
+            var ang = Math.random() * Math.PI * 2;
+            var radius = ringRadius * (0.85 + Math.random() * 0.3);
+            var speed = speedMin + Math.random() * (speedMax - speedMin);
+            positions[i*3] = bx + Math.cos(ang) * radius;
+            positions[i*3+1] = by + (Math.random() - 0.5) * 0.12;
+            positions[i*3+2] = bz + Math.sin(ang) * radius;
+            vx = Math.cos(ang) * speed;
+            vy = (Math.random() - 0.5) * speed * 0.25;
+            vz = Math.sin(ang) * speed;
+        } else {
+            var angleH = Math.random() * Math.PI * 2;
+            var angleV = (Math.random() - 0.5) * Math.PI * 0.8;
+            var speed = speedMin + Math.random() * (speedMax - speedMin);
+            vx = Math.cos(angleH) * Math.cos(angleV) * speed;
+            vy = Math.sin(angleV) * speed + 0.02;
+            vz = Math.sin(angleH) * Math.cos(angleV) * speed;
+        }
+        velocities.push({ vx: vx, vy: vy, vz: vz });
+    }
+    if (type === 'double') {
+        // Double-break: a second, differently colored burst pops moments later
+        var secondColor = ZEN_FIREWORK_COLORS[Math.floor(Math.random() * ZEN_FIREWORK_COLORS.length)];
+        var breakDelay = 300 + Math.random() * 250;
+        zenFireworkTimeouts.push(setTimeout(function() {
+            if (gameMode !== 'zen' || gameState !== 'playing' || !worldGroup) return;
+            spawnZenBurst(
+                bx + (Math.random() - 0.5) * 1.2,
+                by + 0.4 + Math.random() * 0.9,
+                bz,
+                secondColor,
+                Math.random() < 0.5 ? 'ring' : 'peony',
+                mult
+            );
+        }, breakDelay));
     }
     var geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     var mat = new THREE.PointsMaterial({
-        size: 0.9, vertexColors: true, transparent: true, opacity: 1.0,
+        size: matSize * mult, vertexColors: true, transparent: true, opacity: 1.0,
         blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, sizeAttenuation: true
     });
     var mesh = new THREE.Points(geom, mat);
     mesh.userData.velocities = velocities;
+    mesh.userData.drag = drag;
+    mesh.userData.gravity = gravity;
     mesh.userData.age = 0;
-    mesh.userData.maxAge = 180;
+    mesh.userData.maxAge = Math.round(maxLifeMin + Math.random() * (maxLifeMax - maxLifeMin));
     worldGroup.add(mesh);
     zenFireworkBursts.push(mesh);
+}
+
+// Combo dopamine hook: bigger combos = bigger, brighter, more numerous bursts
+// plus a screen-scale flash, a wide halo, and an ambient brightness pulse.
+function triggerComboFireworks(combo, wx, wz) {
+    if (gameMode !== 'zen' || !worldGroup) return;
+    var tier = Math.min(combo, 8);
+    var mult = 1 + tier * 0.12;
+    var extra = Math.min(2 + tier, 8);
+    // Screen-scale flash + halo right at the match point
+    spawnZenBurst(wx, 1.0, wz, 0xffffff, 'flash', Math.min(2.6, mult * 1.2));
+    spawnZenBurst(wx, 1.3, wz, null, 'ring', Math.min(2.8, mult));
+    var types = ['peony', 'ring', 'willow', 'double'];
+    for (var i = 0; i < extra; i++) {
+        (function(idx) {
+            var delay = 60 + idx * 100;
+            zenFireworkTimeouts.push(setTimeout(function() {
+                if (gameMode !== 'zen' || gameState !== 'playing' || !worldGroup) return;
+                spawnZenBurst(
+                    wx + (Math.random() - 0.5) * 8,
+                    0.3 + Math.random() * 3.5,
+                    wz + (Math.random() - 0.5) * 3,
+                    null,
+                    types[idx % types.length],
+                    mult
+                );
+            }, delay));
+        })(i);
+    }
+    zenAmbientPulse = Math.min(1, 0.35 + combo * 0.12);
 }
 
 function clearZenEffects() {
@@ -603,29 +730,49 @@ function clearZenEffects() {
         m.material.dispose();
     });
     zenFireworkBursts = [];
+    zenAmbientPulse = 0;
 }
 
 function updateZenEffects() {
-    // Update ambient particle float
+    // Update ambient particle float + twinkle
     if (zenAmbientParticles) {
         var pos = zenAmbientParticles.geometry.attributes.position;
         var vel = zenAmbientParticles.userData.velocities;
+        var col = zenAmbientParticles.geometry.attributes.color;
+        var tw = zenAmbientParticles.userData.twinkles;
+        var base = zenAmbientParticles.userData.baseColors;
         if (pos && vel) {
             for (var i = 0; i < ZEN_AMBIENT_COUNT && i < vel.length; i++) {
                 pos.array[i*3] += vel[i].vx;
                 pos.array[i*3+1] += vel[i].vy;
-                pos.array[i*3+2] += Math.sin(zenAmbientPhase + vel[i].phase) * 0.001;
+                pos.array[i*3+2] += Math.sin(zenAmbientPhase + vel[i].phase) * 0.0012;
                 // Wrap to bottom when reaching top
                 if (pos.array[i*3+1] > 10) {
                     pos.array[i*3] = (Math.random() - 0.5) * 24;
                     pos.array[i*3+1] = -6;
-                    pos.array[i*3+2] = -1 - Math.random() * 3;
+                    pos.array[i*3+2] = -0.9 - Math.random() * 3;
                 }
             }
             pos.needsUpdate = true;
         }
+        if (col && tw && base) {
+            var pulse = 1 + zenAmbientPulse;
+            for (var t = 0; t < ZEN_AMBIENT_COUNT && t < tw.length; t++) {
+                tw[t].phase += tw[t].speed;
+                var b = tw[t].base * (0.7 + 0.3 * Math.sin(tw[t].phase)) * pulse;
+                col.array[t*3] = base[t*3] * b;
+                col.array[t*3+1] = base[t*3+1] * b;
+                col.array[t*3+2] = base[t*3+2] * b;
+            }
+            col.needsUpdate = true;
+        }
+        zenAmbientParticles.material.opacity = Math.min(1, 0.85 + zenAmbientPulse * 0.15);
     }
     zenAmbientPhase += 0.015;
+    if (zenAmbientPulse > 0) {
+        zenAmbientPulse *= 0.94;
+        if (zenAmbientPulse < 0.01) zenAmbientPulse = 0;
+    }
 
     // Update firework bursts
     for (var i = zenFireworkBursts.length - 1; i >= 0; i--) {
@@ -635,14 +782,16 @@ function updateZenEffects() {
         var pos = burst.geometry.attributes.position;
         var vel = burst.userData.velocities;
         var col = burst.geometry.attributes.color;
+        var drag = burst.userData.drag || 0.965;
+        var grav = burst.userData.gravity || 0;
         if (pos && vel) {
             for (var j = 0; j < vel.length && j * 3 < pos.array.length; j++) {
                 pos.array[j*3] += vel[j].vx;
                 pos.array[j*3+1] += vel[j].vy;
                 pos.array[j*3+2] += vel[j].vz;
-                vel[j].vx *= 0.965;
-                vel[j].vy *= 0.965;
-                vel[j].vz *= 0.965;
+                vel[j].vx *= drag;
+                vel[j].vy = vel[j].vy * drag + grav;
+                vel[j].vz *= drag;
             }
             pos.needsUpdate = true;
             if (col && col.array) {
@@ -650,7 +799,7 @@ function updateZenEffects() {
                 col.needsUpdate = true;
             }
         }
-        burst.material.opacity = Math.max(0, 1 - progress * 1.1);
+        burst.material.opacity = Math.max(0, 1 - progress * 1.05);
         if (progress >= 1) {
             worldGroup.remove(burst);
             burst.geometry.dispose();
@@ -659,7 +808,7 @@ function updateZenEffects() {
         }
     }
 }
-function triggerGameOver() { AudioEngine.stopMenuMusic(); clearZenEffects(); gameState = 'gameover'; stopSpawning(); AudioEngine.stopBGM(); var isBattle = gameMode === 'battle', playerWon = battlePlayerScore >= battleAiScore; if (isBattle && playerWon) AudioEngine.playWin(); else AudioEngine.playGameOver(); if (gameMode === 'battle') { stopAITicks(); stopBattleTimer(); } var isNewHigh = false; if (gameMode !== 'battle' && score > highScore) { highScore = score; localStorage.setItem('devildice_zen_hs', highScore); isNewHigh = true; } document.getElementById('go-score').innerText = (gameMode === 'battle' ? battlePlayerScore : score).toLocaleString(); document.getElementById('go-combo').innerText = comboCount.toString(); document.getElementById('new-high-indicator').style.display = isNewHigh ? 'block' : 'none'; var titleEl = document.getElementById('gameover-title-text'); if (gameMode === 'puzzle') titleEl.innerText = puzzleCleared ? 'ALL PUZZLES CLEARED!' : 'OUT OF MOVES!'; else if (isBattle) titleEl.innerText = playerWon ? 'YOU WIN!' : 'YOU LOSE!'; else titleEl.innerText = 'BOARD FILLED!'; document.getElementById('battle-go-stats').style.display = isBattle ? '' : 'none'; if (isBattle) { document.getElementById('go-player-score').innerText = battlePlayerScore.toLocaleString(); document.getElementById('go-ai-score').innerText = battleAiScore.toLocaleString(); var pr = document.getElementById('go-player-row'), ar = document.getElementById('go-ai-row'); if (playerWon) { pr.classList.add('winner'); ar.classList.remove('winner'); } else { ar.classList.add('winner'); pr.classList.remove('winner'); } } else { document.getElementById('go-player-row').classList.remove('winner'); document.getElementById('go-ai-row').classList.remove('winner'); } document.getElementById('hud-screen').classList.remove('active'); document.getElementById('gameover-screen').classList.add('active'); document.getElementById('battle-timer-box').style.display = 'none'; }
+function triggerGameOver() { AudioEngine.stopMenuMusic(); hideAiMoveMarker(); clearZenEffects(); gameState = 'gameover'; stopSpawning(); AudioEngine.stopBGM(); var isBattle = gameMode === 'battle', playerWon = battlePlayerScore >= battleAiScore; if (isBattle && playerWon) AudioEngine.playWin(); else AudioEngine.playGameOver(); if (gameMode === 'battle') { stopAITicks(); stopBattleTimer(); } var isNewHigh = false; if (gameMode !== 'battle' && score > highScore) { highScore = score; localStorage.setItem('devildice_zen_hs', highScore); isNewHigh = true; } document.getElementById('go-score').innerText = (gameMode === 'battle' ? battlePlayerScore : score).toLocaleString(); document.getElementById('go-combo').innerText = comboCount.toString(); document.getElementById('new-high-indicator').style.display = isNewHigh ? 'block' : 'none'; var titleEl = document.getElementById('gameover-title-text'); if (gameMode === 'puzzle') titleEl.innerText = puzzleCleared ? 'ALL PUZZLES CLEARED!' : 'OUT OF MOVES!'; else if (isBattle) titleEl.innerText = playerWon ? 'YOU WIN!' : 'YOU LOSE!'; else titleEl.innerText = 'BOARD FILLED!'; document.getElementById('battle-go-stats').style.display = isBattle ? '' : 'none'; if (isBattle) { document.getElementById('go-player-score').innerText = battlePlayerScore.toLocaleString(); document.getElementById('go-ai-score').innerText = battleAiScore.toLocaleString(); var pr = document.getElementById('go-player-row'), ar = document.getElementById('go-ai-row'); if (playerWon) { pr.classList.add('winner'); ar.classList.remove('winner'); } else { ar.classList.add('winner'); pr.classList.remove('winner'); } } else { document.getElementById('go-player-row').classList.remove('winner'); document.getElementById('go-ai-row').classList.remove('winner'); } document.getElementById('hud-screen').classList.remove('active'); document.getElementById('gameover-screen').classList.add('active'); document.getElementById('battle-timer-box').style.display = 'none'; }
 
 function setupPuzzleMode() { puzzleStage = 1; setupPuzzleStage(); }
 function setupPuzzleStage() {
@@ -763,9 +912,58 @@ function hideStageClearBanner() {
 function setupBattleMode() { clearAllDice(); battlePlayerScore = 0; battleAiScore = 0; battleTimeRemaining = battleDuration; battleCurrentTurn = null; battlePlayerFrozenUntil = 0; battleAiFrozenUntil = 0; comboCount = 0; if (battleTimerId) { clearInterval(battleTimerId); battleTimerId = null; } battleTimerId = setInterval(function() { if (gameState !== 'playing' || gameMode !== 'battle') return; battleTimeRemaining--; updateBattleHUD(); if (battleTimeRemaining <= 0) triggerGameOver(); }, 1000); populateInitialBoard(); startSpawning(); startAITicks(); updateBattleHUD(); }
 function stopAITicks() { if (aiTickInterval) { clearInterval(aiTickInterval); aiTickInterval = null; } }
 function stopBattleTimer() { if (battleTimerId) { clearInterval(battleTimerId); battleTimerId = null; } }
-function startAITicks() { stopAITicks(); var rates = { easy: 1200, medium: 800, hard: 500 }, interval = rates[aiDifficulty] || 800; aiTickInterval = setInterval(function() { if (gameState !== 'playing' || gameMode !== 'battle') return; if (Date.now() < battleAiFrozenUntil || animationLock) return; var bestMove = aiFindBestMove(); if (bestMove) { var turn = 'ai'; battleCurrentTurn = turn; var die = bestMove.die, dir = bestMove.direction, isRoll = bestMove.isRoll; animationLock = true; if (isRoll) die.roll(dir, function() {}); else die.slide(dir, function() {}); var moved = die.state === 'rolling' || die.state === 'sliding'; setTimeout(function() { if (gameState === 'playing' && gameMode === 'battle' && moved) { battleCurrentTurn = turn; checkAllMatches(); } animationLock = false; if (gameMode === 'battle') battleCurrentTurn = null; }, ROLL_DURATION + 50); } }, interval); }
+function startAITicks() { stopAITicks(); var rates = { easy: 1200, medium: 800, hard: 500 }, interval = rates[aiDifficulty] || 800; aiTickInterval = setInterval(function() { if (gameState !== 'playing' || gameMode !== 'battle') return; if (Date.now() < battleAiFrozenUntil || animationLock) return; var bestMove = aiFindBestMove(); if (bestMove) { var turn = 'ai'; battleCurrentTurn = turn; var die = bestMove.die, dir = bestMove.direction, isRoll = bestMove.isRoll; showAiMoveMarker(die); animationLock = true; if (isRoll) die.roll(dir, function() {}); else die.slide(dir, function() {}); var moved = die.state === 'rolling' || die.state === 'sliding'; setTimeout(function() { if (gameState === 'playing' && gameMode === 'battle' && moved) { battleCurrentTurn = turn; checkAllMatches(); } animationLock = false; if (gameMode === 'battle') battleCurrentTurn = null; }, ROLL_DURATION + 50); } }, interval); }
 function aiFindBestMove() { var bestScore = -Infinity, bestMove = null; for (var x = 0; x < GRID_COLS; x++) for (var y = 0; y < GRID_ROWS; y++) { var die = grid[x][y]; if (!die || die.state !== 'normal' || die.cellType !== CELL_TYPE.ACTIVE) continue; var directions = ['north', 'south', 'east', 'west']; for (var di = 0; di < directions.length; di++) { var dir = directions[di], d = DIRECTIONS[dir], nx = x + d.dx, ny = y + d.dy; if (nx < 0 || nx >= GRID_COLS || ny < 0 || ny >= GRID_ROWS) continue; if (grid[nx][ny] === null) { var s = aiScoreMove(die, dir, true); if (s > bestScore) { bestScore = s; bestMove = { die: die, direction: dir, isRoll: true }; } var s2 = aiScoreMove(die, dir, false); if (s2 > bestScore) { bestScore = s2; bestMove = { die: die, direction: dir, isRoll: false }; } } } } return bestMove; }
 function aiScoreMove(die, dir, isRoll) { var s = 0, d = DIRECTIONS[dir], tx = die.gridX + d.dx, ty = die.gridY + d.dy, cv = die.faces.top; for (var dx = -2; dx <= 2; dx++) for (var dy = -2; dy <= 2; dy++) { var sx = tx + dx, sy = ty + dy; if (sx >= 0 && sx < GRID_COLS && sy >= 0 && sy < GRID_ROWS) { var n = grid[sx][sy]; if (n && n.state === 'normal' && n.cellType === CELL_TYPE.ACTIVE) { if (n.faces.top === cv) s += 30; if (n.faces.top === 1) s += 15; } } } if (cv >= 3) s += cv * 10; for (var gi = 0; gi < activeSinkingGroups.length; gi++) { var group = activeSinkingGroups[gi]; for (var gdi = 0; gdi < group.diceList.length; gdi++) { var gd = group.diceList[gdi], dist = Math.abs(gd.gridX - tx) + Math.abs(gd.gridY - ty); if (dist <= 2) s += 20; } } return s + Math.random() * 10; }
+function ensureAiMoveMarker() {
+    if (aiMoveMarker) return aiMoveMarker;
+    aiMoveMarker = new THREE.Group();
+    var ring = new THREE.Mesh(
+        new THREE.RingGeometry(0.7, 1.0, 48),
+        new THREE.MeshBasicMaterial({ color: AI_MARKER_COLOR, transparent: true, opacity: 0.95, side: THREE.DoubleSide, depthWrite: false, renderOrder: 3 })
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.025;
+    var arrow = new THREE.Mesh(
+        new THREE.ConeGeometry(0.2, 0.44, 4),
+        new THREE.MeshBasicMaterial({ color: AI_MARKER_COLOR, transparent: true, opacity: 1.0, depthWrite: false })
+    );
+    arrow.rotation.x = Math.PI; // tip points down at the die
+    arrow.position.y = 1.55;
+    aiMoveMarker.add(ring);
+    aiMoveMarker.add(arrow);
+    aiMoveMarker.userData.ring = ring;
+    aiMoveMarker.userData.arrow = arrow;
+    aiMoveMarker.visible = false;
+    worldGroup.add(aiMoveMarker);
+    return aiMoveMarker;
+}
+function showAiMoveMarker(die) {
+    var m = ensureAiMoveMarker();
+    aiMarkerDie = die;
+    aiMarkerUntil = Date.now() + AI_MARKER_DURATION;
+    m.visible = true;
+}
+function hideAiMoveMarker() {
+    if (aiMoveMarker) aiMoveMarker.visible = false;
+    aiMarkerDie = null;
+    aiMarkerUntil = 0;
+}
+function updateAiMoveMarker() {
+    if (!aiMoveMarker || !aiMarkerDie) { if (aiMoveMarker) aiMoveMarker.visible = false; return; }
+    var die = aiMarkerDie;
+    if (gameMode !== 'battle' || Date.now() > aiMarkerUntil || !die.pivotGroup || !die.pivotGroup.parent) {
+        aiMoveMarker.visible = false;
+        aiMarkerDie = null;
+        return;
+    }
+    aiMoveMarker.visible = true;
+    aiMoveMarker.position.set(die.pivotGroup.position.x, 0, die.pivotGroup.position.z);
+    var t = (Date.now() % 700) / 700, pulse = 1 + 0.12 * Math.sin(t * Math.PI * 2);
+    var ring = aiMoveMarker.userData.ring, arrow = aiMoveMarker.userData.arrow;
+    if (ring) { ring.scale.set(pulse, pulse, 1); ring.material.opacity = 0.72 + 0.23 * (1 - t); }
+    if (arrow) arrow.position.y = 1.5 + Math.sin(t * Math.PI * 2) * 0.18;
+}
 function updateBattleHUD() {
     if (gameMode !== 'battle') return;
     var min = Math.floor(battleTimeRemaining / 60), sec = battleTimeRemaining % 60;
@@ -798,7 +996,7 @@ function hideComboBanner() { document.getElementById('combo-display').classList.
 function setupControlListeners() { window.addEventListener('keydown', handleKeyboard); setupPointerEvents(); document.getElementById('zen-btn').addEventListener('click', function() { startGame('zen'); }); document.getElementById('puzzle-btn').addEventListener('click', function() { startGame('puzzle'); }); document.getElementById('battle-btn').addEventListener('click', function() { startGame('battle'); }); document.getElementById('how-to-btn').addEventListener('click', function() { document.getElementById('how-to-modal').classList.add('active'); }); document.getElementById('close-how-to').addEventListener('click', function() { document.getElementById('how-to-modal').classList.remove('active'); }); document.getElementById('settings-btn').addEventListener('click', function() { document.getElementById('board-size').value = boardSize; document.getElementById('sound-toggle').checked = soundEnabled; document.getElementById('music-toggle').checked = musicEnabled; document.getElementById('difficulty').value = selectedDifficulty; document.getElementById('ai-difficulty').value = aiDifficulty; document.getElementById('battle-duration').value = battleDuration; document.getElementById('settings-modal').classList.add('active'); }); document.getElementById('close-settings').addEventListener('click', function() { soundEnabled = document.getElementById('sound-toggle').checked; var mc = document.getElementById('music-toggle').checked; if (mc !== musicEnabled) { musicEnabled = mc; if (gameState === 'playing') { if (musicEnabled) AudioEngine.startBGM(); else AudioEngine.stopBGM(); } else if (gameState === 'menu') { if (musicEnabled) AudioEngine.startMenuMusic(); else AudioEngine.stopMenuMusic(); } } selectedDifficulty = document.getElementById('difficulty').value; aiDifficulty = document.getElementById('ai-difficulty').value; battleDuration = parseInt(document.getElementById('battle-duration').value); var newBoardSize = document.getElementById('board-size').value; if (newBoardSize !== boardSize) { stopSpawning(); clearAllDice(); setBoardSize(newBoardSize); if (gameState === 'playing') startGame(gameMode); else quitToMenu(); } document.getElementById('settings-modal').classList.remove('active'); }); document.getElementById('pause-btn').addEventListener('click', pauseGame); document.getElementById('resume-btn').addEventListener('click', resumeGame); document.getElementById('restart-pause-btn').addEventListener('click', function() { startGame(gameMode); }); document.getElementById('quit-btn').addEventListener('click', quitToMenu); document.getElementById('retry-btn').addEventListener('click', function() { startGame(gameMode); }); document.getElementById('menu-quit-btn').addEventListener('click', quitToMenu); }
 
 var _frameCount = 0, _lastFpsTime = performance.now(), _currentFPS = 60;
-function gameLoop() { requestAnimationFrame(gameLoop); _frameCount++; var now = performance.now(); if (now - _lastFpsTime >= 1000) { _currentFPS = Math.round(_frameCount * 1000 / (now - _lastFpsTime)); _frameCount = 0; _lastFpsTime = now; } if (renderer && scene && camera) renderer.render(scene, camera); if (gameState === 'playing') { updateSinkingDice(); updateSinkingHighlights(); updateZenEffects(); var activeCount = countActiveDice(); updateFullnessBar(activeCount / totalCells); if (gameMode !== 'battle' && activeCount >= totalCells) triggerGameOver(); if (gameMode === 'battle') updateFreezeDisplay(); } }
+function gameLoop() { requestAnimationFrame(gameLoop); _frameCount++; var now = performance.now(); if (now - _lastFpsTime >= 1000) { _currentFPS = Math.round(_frameCount * 1000 / (now - _lastFpsTime)); _frameCount = 0; _lastFpsTime = now; } if (renderer && scene && camera) renderer.render(scene, camera); if (gameState === 'playing') { updateSinkingDice(); updateSinkingHighlights(); updateZenEffects(); updateAiMoveMarker(); var activeCount = countActiveDice(); updateFullnessBar(activeCount / totalCells); if (gameMode !== 'battle' && activeCount >= totalCells) triggerGameOver(); if (gameMode === 'battle') updateFreezeDisplay(); } }
 function updateSinkingHighlights() { for (var x = 0; x < GRID_COLS; x++) for (var y = 0; y < GRID_ROWS; y++) { var hl = sinkingHighlights[x] && sinkingHighlights[x][y]; if (hl) { var die = grid[x] && grid[x][y]; hl.visible = !!(die && die.state === 'sinking'); } } }
 
 window.onload = function() { document.getElementById('menu-highscore').innerText = Number(highScore).toLocaleString(); initEngine(); setupControlListeners(); gameLoop(); AudioEngine.startMenuMusic(); };
@@ -827,6 +1025,7 @@ Object.defineProperty(window, 'autoGameState', { get: function() {
         gameMode: gameMode,
         gameState: gameState,
         activeSinkingGroups: activeSinkingGroups.length,
+        aiMarkerVisible: !!(aiMoveMarker && aiMoveMarker.visible),
         animationLock: animationLock
     };
 } });
