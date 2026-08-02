@@ -46,7 +46,7 @@ var STANDARD_ORIENTATIONS = {
 var DIRECTIONS = { north: { dx: 0, dy: -1 }, south: { dx: 0, dy: 1 }, east: { dx: 1, dy: 0 }, west: { dx: -1, dy: 0 } };
 var PALETTE = {
     boardFloor: 0x05030c, boardGrid: 0x33ddff,
-    normalDie: { bg: '#0b0814', pips: '#00ff88', border: '#1b2540' },
+    normalDie: { bg: '#3a2d52', pips: '#00ff88', border: '#7a68b8' },
     sinkingDie: { bg: '#17001a', pips: '#ff44cc', border: '#ff3366' },
     risingDie: { bg: '#081522', pips: '#33ccff', border: '#1f5380' },
     sinkingOne: { bg: '#15050a', pips: '#ff2f6d', border: '#ff88aa' },
@@ -189,11 +189,11 @@ function getDiceTexture(value, state, rot) {
     ctx.quadraticCurveTo(m, 128 - m, m, 128 - m - r); ctx.lineTo(m, m + r);
     ctx.quadraticCurveTo(m, m, m + r, m); ctx.closePath(); ctx.fill();
     var grad = ctx.createRadialGradient(64, 64, 10, 64, 64, 60);
-    grad.addColorStop(0, 'rgba(255,255,255,0.05)'); grad.addColorStop(1, 'rgba(0,0,0,0.35)'); ctx.fillStyle = grad; ctx.fill();
-    ctx.fillStyle = colors.pips; ctx.shadowBlur = 8; ctx.shadowColor = colors.pips;
+    grad.addColorStop(0, 'rgba(255,255,255,0.05)'); grad.addColorStop(1, 'rgba(0,0,0,0.22)'); ctx.fillStyle = grad; ctx.fill();
+    ctx.fillStyle = colors.pips; ctx.shadowBlur = 5; ctx.shadowColor = colors.pips;
     var pipR = 10, pad = 32;
     var pos = { c: [64, 64], tl: [pad, pad], tr: [128 - pad, pad], bl: [pad, 128 - pad], br: [128 - pad, 128 - pad], ml: [pad, 64], mr: [128 - pad, 64] };
-    function dp(p) { ctx.beginPath(); ctx.arc(p[0], p[1], pipR, 0, Math.PI * 2); ctx.fill(); }
+    function dp(p) { ctx.beginPath(); ctx.arc(p[0], p[1], pipR, 0, Math.PI * 2); ctx.strokeStyle = 'rgba(8,5,16,0.85)'; ctx.lineWidth = 3; ctx.stroke(); ctx.fill(); }
     switch (value) { case 1: dp(pos.c); break; case 2: dp(pos.tl); dp(pos.br); break; case 3: dp(pos.tl); dp(pos.c); dp(pos.br); break; case 4: dp(pos.tl); dp(pos.tr); dp(pos.bl); dp(pos.br); break; case 5: dp(pos.tl); dp(pos.tr); dp(pos.c); dp(pos.bl); dp(pos.br); break; case 6: dp(pos.tl); dp(pos.tr); dp(pos.ml); dp(pos.mr); dp(pos.bl); dp(pos.br); break; }
     if (rot > 0) { var rcv = document.createElement('canvas'); rcv.width = 128; rcv.height = 128; var rctx = rcv.getContext('2d'); rctx.translate(64, 64); rctx.rotate(rot * Math.PI / 2); rctx.drawImage(cv, -64, -64); cv = rcv; }
     var tex = new THREE.CanvasTexture(cv); textureCache[ck] = tex; return tex;
@@ -315,7 +315,7 @@ function getDiceMaterials(faces, state) {
     state = state || 'normal';
     var key = faces.right + '_' + faces.left + '_' + faces.top + '_' + faces.bottom + '_' + faces.back + '_' + faces.front + '_' + state + '_v6';
     if (materialsCache[key]) return materialsCache[key];
-    var emissiveColor = 0x00ff88, intensity = 2.0;
+    var emissiveColor = 0x00ff88, intensity = 2.4;
     if (state === 'hover') { emissiveColor = 0xff2fd6; intensity = 1.8; }
     else if (state === 'sinking') { emissiveColor = 0xff44cc; intensity = 1.5; }
     else if (state === 'sinking_one') { emissiveColor = 0xff2f6d; intensity = 1.5; }
@@ -328,10 +328,10 @@ function getDiceMaterials(faces, state) {
             emissive: emissiveColor,
             emissiveMap: getDiceEmissiveTexture(fv, state, rot),
             emissiveIntensity: intensity,
-            roughness: 0.4,
-            metalness: 0.7,
+            roughness: 0.5,
+            metalness: 0.3,
             envMap: env,
-            envMapIntensity: 0.55,
+            envMapIntensity: 0.25,
             normalMap: getDiceNormalTexture(fv, rot)
         });
     }
@@ -433,19 +433,7 @@ Die.prototype.slide = function(direction, onComplete) {
     var d = DIRECTIONS[direction], tx = this.gridX + d.dx, ty = this.gridY + d.dy;
     if (tx < 0 || tx >= GRID_COLS || ty < 0 || ty >= GRID_ROWS) { if (onComplete) onComplete(); return; }
     if (grid[tx][ty] === null) { this._execSlide(direction, onComplete); return; }
-    // Occupied target: try to push the whole lane of normal active dice.
-    var chain = [], cx = tx, cy = ty;
-    while (cx >= 0 && cx < GRID_COLS && cy >= 0 && cy < GRID_ROWS) {
-        var cd = grid[cx][cy];
-        if (!cd) break;
-        // Locked/sinking/animating dice are obstacles, not pushable.
-        if (cd.cellType !== CELL_TYPE.ACTIVE || cd.state !== 'normal') { chain = null; break; }
-        chain.push(cd);
-        cx += d.dx; cy += d.dy;
-    }
-    var pushable = chain && chain.length > 0 && cx >= 0 && cx < GRID_COLS && cy >= 0 && cy < GRID_ROWS && grid[cx][cy] === null;
-    if (!pushable) { AudioEngine.playMove(); if (onComplete) onComplete(); return; }
-    this._execPush(direction, chain, onComplete);
+    if (grid[tx][ty] !== null) { AudioEngine.playMove(); if (onComplete) onComplete(); return; }
 };
 Die.prototype._execSlide = function(direction, onComplete) {
     this.state = 'sliding'; var sx = this.gridX, sy = this.gridY, d = DIRECTIONS[direction], ex = sx + d.dx, ey = sy + d.dy;
@@ -454,42 +442,6 @@ Die.prototype._execSlide = function(direction, onComplete) {
     var self = this, startTime = Date.now(), sWX = (sx - (GRID_COLS - 1) / 2) * GRID_SPACING, sWZ = (sy - (GRID_ROWS - 1) / 2) * GRID_SPACING;
     var eWX = (ex - (GRID_COLS - 1) / 2) * GRID_SPACING, eWZ = (ey - (GRID_ROWS - 1) / 2) * GRID_SPACING;
     function tick() { var p = Math.min((Date.now() - startTime) / SLIDE_DURATION, 1.0), ease = 1 - Math.pow(1 - p, 2); self.pivotGroup.position.set(sWX + ease * (eWX - sWX), 0, sWZ + ease * (eWZ - sWZ)); if (p < 1) requestAnimationFrame(tick); else { self.state = 'normal'; self.height = 0; self.mesh.material = getDiceMaterials(self.faces, 'normal'); self._syncPivot(); if (onComplete) onComplete(); } }
-    requestAnimationFrame(tick);
-};
-Die.prototype._execPush = function(direction, chain, onComplete) {
-    var self = this, d = DIRECTIONS[direction];
-    var moves = [];
-    for (var i = 0; i < chain.length; i++) {
-        var die = chain[i];
-        moves.push({ die: die, sx: die.gridX, sy: die.gridY, ex: die.gridX + d.dx, ey: die.gridY + d.dy });
-    }
-    moves.push({ die: self, sx: self.gridX, sy: self.gridY, ex: chain[0].gridX, ey: chain[0].gridY });
-    // Update the grid atomically, then animate the whole chain in parallel.
-    moves.forEach(function(m) { grid[m.sx][m.sy] = null; m.die.state = 'sliding'; });
-    moves.forEach(function(m) { grid[m.ex][m.ey] = m.die; m.die.gridX = m.ex; m.die.gridY = m.ey; });
-    moves.forEach(function(m) { m.die.mesh.material = getDiceMaterials(m.die.faces, 'hover'); });
-    AudioEngine.playSlide();
-    var startTime = Date.now();
-    var animMoves = moves.map(function(m) {
-        return {
-            die: m.die,
-            sX: (m.sx - (GRID_COLS - 1) / 2) * GRID_SPACING,
-            sZ: (m.sy - (GRID_ROWS - 1) / 2) * GRID_SPACING,
-            eX: (m.ex - (GRID_COLS - 1) / 2) * GRID_SPACING,
-            eZ: (m.ey - (GRID_ROWS - 1) / 2) * GRID_SPACING
-        };
-    });
-    function tick() {
-        var p = Math.min((Date.now() - startTime) / SLIDE_DURATION, 1.0), ease = 1 - Math.pow(1 - p, 2);
-        animMoves.forEach(function(am) {
-            am.die.pivotGroup.position.set(am.sX + ease * (am.eX - am.sX), 0, am.sZ + ease * (am.eZ - am.sZ));
-        });
-        if (p < 1) requestAnimationFrame(tick);
-        else {
-            animMoves.forEach(function(am) { am.die.state = 'normal'; am.die.height = 0; am.die.mesh.material = getDiceMaterials(am.die.faces, 'normal'); am.die._syncPivot(); });
-            if (onComplete) onComplete();
-        }
-    }
     requestAnimationFrame(tick);
 };
 Die.prototype.startSinking = function(groupId) { if (this.state === 'sinking') return; this.state = 'sinking'; this.sinkingGroup = groupId; this.sinkingTimer = Date.now(); var isOne = (this.faces.top === 1); this.mesh.material = getDiceMaterials(this.faces, isOne ? 'sinking_one' : 'sinking'); };
@@ -1119,7 +1071,7 @@ function createFloatingScore(gx, gy, txt) { var wx = (gx - (GRID_COLS - 1) / 2) 
 var inputState = { activePtrId: null, sX: 0, sY: 0, sT: 0, curDie: null, holdTmr: null, isHolding: false, hasMoved: false, lastGX: -1, lastGY: -1 };
 function setupPointerEvents() { var cv = renderer.domElement; cv.addEventListener('pointerdown', onPointerDown); cv.addEventListener('pointermove', onPointerMove); cv.addEventListener('pointerup', onPointerUp); cv.addEventListener('pointercancel', onPointerUp); cv.addEventListener('contextmenu', function(e) { e.preventDefault(); }); }
 function onPointerDown(e) { if (gameState !== 'playing' || animationLock || inputState.activePtrId !== null) return; if (gameMode === 'battle' && Date.now() < battlePlayerFrozenUntil) return; e.preventDefault(); inputState.activePtrId = e.pointerId; inputState.sX = e.clientX; inputState.sY = e.clientY; inputState.sT = Date.now(); inputState.isHolding = false; inputState.hasMoved = false; inputState.curDie = null; inputState.lastGX = -1; inputState.lastGY = -1; var die = raycastDie(e.clientX, e.clientY); if (die && die.state === 'normal' && die.cellType === CELL_TYPE.ACTIVE) { inputState.curDie = die; die.setHover(true); inputState.lastGX = die.gridX; inputState.lastGY = die.gridY; } if (inputState.holdTmr) clearTimeout(inputState.holdTmr); inputState.holdTmr = setTimeout(function() { if (inputState.activePtrId !== null && inputState.curDie && !inputState.hasMoved) { inputState.isHolding = true; AudioEngine.playHaptic(); showGestureHint('Hold & Drag'); } }, HOLD_THRESHOLD); }
-function onPointerMove(e) { if (gameState !== 'playing' || inputState.activePtrId !== e.pointerId) return; if (gameMode === 'battle' && Date.now() < battlePlayerFrozenUntil) return; var dx = e.clientX - inputState.sX, dy = e.clientY - inputState.sY, dist = Math.sqrt(dx * dx + dy * dy); if (dist < SWIPE_THRESHOLD && !inputState.isHolding) return; if (inputState.isHolding && inputState.curDie) { e.preventDefault(); inputState.hasMoved = true; var cell = getGridCellFromPointer(e.clientX, e.clientY); if (cell && (cell.gx !== inputState.lastGX || cell.gy !== inputState.lastGY)) { var gdx = cell.gx - inputState.lastGX, gdy = cell.gy - inputState.lastGY; var dir = null; if (gdx === 1 && gdy === 0) dir = 'east'; else if (gdx === -1 && gdy === 0) dir = 'west'; else if (gdx === 0 && gdy === 1) dir = 'south'; else if (gdx === 0 && gdy === -1) dir = 'north'; if (dir) { triggerSlide(inputState.curDie, dir); inputState.lastGX = cell.gx; inputState.lastGY = cell.gy; } } } else if (dist >= SWIPE_THRESHOLD) { if (inputState.holdTmr) { clearTimeout(inputState.holdTmr); inputState.holdTmr = null; } inputState.hasMoved = true; } }
+function onPointerMove(e) { if (gameState !== 'playing' || inputState.activePtrId !== e.pointerId) return; if (gameMode === 'battle' && Date.now() < battlePlayerFrozenUntil) return; var dx = e.clientX - inputState.sX, dy = e.clientY - inputState.sY, dist = Math.sqrt(dx * dx + dy * dy); if (dist < SWIPE_THRESHOLD && !inputState.isHolding) return; if (inputState.isHolding && inputState.curDie) { e.preventDefault(); inputState.hasMoved = true; var cell = getGridCellFromPointer(e.clientX, e.clientY); if (cell && (cell.gx !== inputState.lastGX || cell.gy !== inputState.lastGY)) { var gdx = cell.gx - inputState.lastGX, gdy = cell.gy - inputState.lastGY; var dir = null; if (gdx === 1 && gdy === 0) dir = 'east'; else if (gdx === -1 && gdy === 0) dir = 'west'; else if (gdx === 0 && gdy === 1) dir = 'south'; else if (gdx === 0 && gdy === -1) dir = 'north'; else if (gdx !== 0 || gdy !== 0) { if (Math.abs(gdx) >= Math.abs(gdy)) dir = gdx > 0 ? 'east' : 'west'; else dir = gdy > 0 ? 'south' : 'north'; } if (dir) { triggerSlide(inputState.curDie, dir); inputState.lastGX = cell.gx; inputState.lastGY = cell.gy; } } } else if (dist >= SWIPE_THRESHOLD) { if (inputState.holdTmr) { clearTimeout(inputState.holdTmr); inputState.holdTmr = null; } inputState.hasMoved = true; } }
 function onPointerUp(e) { if (inputState.activePtrId !== e.pointerId) return; if (inputState.holdTmr) { clearTimeout(inputState.holdTmr); inputState.holdTmr = null; } var dx = e.clientX - inputState.sX, dy = e.clientY - inputState.sY, dist = Math.sqrt(dx * dx + dy * dy), elapsed = Date.now() - inputState.sT; if (inputState.curDie) inputState.curDie.setHover(false); if (!inputState.isHolding && inputState.hasMoved && dist >= SWIPE_THRESHOLD && elapsed < HOLD_THRESHOLD) { if (gameMode !== 'battle' || Date.now() >= battlePlayerFrozenUntil) { var dir = getSwipeDirection(inputState.sX, inputState.sY, e.clientX, e.clientY); if (inputState.curDie && inputState.curDie.state === 'normal') triggerRoll(inputState.curDie, dir); } } hideGestureHint(); inputState.activePtrId = null; inputState.curDie = null; inputState.isHolding = false; inputState.hasMoved = false; }
 function raycastDie(cx, cy) { var rect = renderer.domElement.getBoundingClientRect(), mx = ((cx - rect.left) / rect.width) * 2 - 1, my = -((cy - rect.top) / rect.height) * 2 + 1; var rc = new THREE.Raycaster(); rc.setFromCamera(new THREE.Vector2(mx, my), camera); var hits = rc.intersectObjects(diceGroup.children, true); if (hits.length > 0) { var obj = hits[0].object; while (obj && !obj.userData.die) obj = obj.parent; if (obj && obj.userData.die) return obj.userData.die; } return null; }
 function getSwipeDirection(sx, sy, ex, ey) { function projectToGridPlane(cx, cy) { var rect = renderer.domElement.getBoundingClientRect(), mx = ((cx - rect.left) / rect.width) * 2 - 1, my = -((cy - rect.top) / rect.height) * 2 + 1; var rc = new THREE.Raycaster(); rc.setFromCamera(new THREE.Vector2(mx, my), camera); var plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); var pt = new THREE.Vector3(); if (rc.ray.intersectPlane(plane, pt)) return pt; return null; } var p1 = projectToGridPlane(sx, sy), p2 = projectToGridPlane(ex, ey); if (p1 && p2) { var gdx = p2.x - p1.x, gdz = p2.z - p1.z; if (gdx !== 0 && Math.abs(gdx) >= Math.abs(gdz)) return gdx > 0 ? 'east' : 'west'; if (gdz !== 0) return gdz > 0 ? 'south' : 'north'; } var dx = ex - sx, dy = ey - sy, ang = Math.atan2(dy, dx), deg = ang * (180 / Math.PI); if (deg < 0) deg += 360; if (deg >= 0 && deg < 90) return "east"; if (deg >= 90 && deg < 180) return "south"; if (deg >= 180 && deg < 270) return "west"; return "north"; }
