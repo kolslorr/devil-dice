@@ -84,6 +84,12 @@ var nebulaMesh = null, nebulaMat = null, nebulaScene = null, nebulaCam = null, n
 var stardustPoints = null, stardustPhase = 0, STARDUST_COUNT = 180;
 var circuitTraceMesh = null, circuitTraceMat = null, circuitPulse = 0;
 var auraPoints = null, AURA_MAX_PARTICLES = 48;
+// ── High-end polish: procedural env map, dynamic light, particle trails ──
+var nebulaEnvMap = null;
+var dynamicLight = null, dynamicLightStrength = 0;
+var _dynTargetPos = new THREE.Vector3(), _nebulaFwd = new THREE.Vector3();
+var trailPoints = null, TRAIL_MAX_PARTICLES = 192;
+var trailParts = null, trailHead = 0, trailLiveCount = 0, trailLastTime = 0;
 
 var AudioEngine = {
     init: function() { if (audioCtx) return; try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) {} },
@@ -212,9 +218,102 @@ function getDiceEmissiveTexture(value, state, rot) {
     var tex = new THREE.CanvasTexture(cv); textureCache[ck] = tex; return tex;
 }
 
+// RoundedBoxGeometry does not exist at three r128 (added in r130), so beveled
+// dice edges are simulated with a canvas-generated tangent-space normal map:
+// a smooth height falloff around the rounded-rect border plus raised pip domes.
+function getDiceNormalTexture(value, rot) {
+    rot = rot || 0;
+    var ck = 'n_' + value + '_r' + rot;
+    if (textureCache[ck]) return textureCache[ck];
+    var S = 128, m = 6, cr = 12, bevel = 13, pipR = 10, pad = 32;
+    var centers = [];
+    if (value === 1) centers = [[64, 64]];
+    else if (value === 2) centers = [[pad, pad], [S - pad, S - pad]];
+    else if (value === 3) centers = [[pad, pad], [64, 64], [S - pad, S - pad]];
+    else if (value === 4) centers = [[pad, pad], [S - pad, pad], [pad, S - pad], [S - pad, S - pad]];
+    else if (value === 5) centers = [[pad, pad], [S - pad, pad], [64, 64], [pad, S - pad], [S - pad, S - pad]];
+    else centers = [[pad, pad], [S - pad, pad], [pad, 64], [S - pad, 64], [pad, S - pad], [S - pad, S - pad]];
+    var hw = S / 2 - m, hh = S / 2 - m;
+    function heightAt(px, py) {
+        var qx = Math.abs(px - S / 2) - (hw - cr);
+        var qy = Math.abs(py - S / 2) - (hh - cr);
+        var ox = Math.max(qx, 0), oy = Math.max(qy, 0);
+        var sd = Math.sqrt(ox * ox + oy * oy) - cr + Math.min(Math.max(qx, qy), 0);
+        var h = 0.5 - sd / (bevel * 2);
+        if (h < 0) h = 0; else if (h > 1) h = 1;
+        for (var pi = 0; pi < centers.length; pi++) {
+            var dx = px - centers[pi][0], dy = py - centers[pi][1];
+            var dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < pipR) h += 0.28;
+            else if (dist < pipR + 4) h += 0.28 * (1 - (dist - pipR) / 4);
+        }
+        return h;
+    }
+    var heights = new Float32Array(S * S);
+    for (var y = 0; y < S; y++) for (var x = 0; x < S; x++) heights[y * S + x] = heightAt(x + 0.5, y + 0.5);
+    var cv = document.createElement('canvas'); cv.width = S; cv.height = S;
+    var ctx = cv.getContext('2d');
+    var img = ctx.createImageData(S, S), px = img.data, gain = 1.8;
+    for (var y = 0; y < S; y++) {
+        var yU = y > 0 ? y - 1 : y, yD = y < S - 1 ? y + 1 : y;
+        for (var x = 0; x < S; x++) {
+            var xL = x > 0 ? x - 1 : x, xR = x < S - 1 ? x + 1 : x;
+            var i = y * S + x;
+            var gx = (heights[y * S + xL] - heights[y * S + xR]) * gain;
+            var gy = (heights[yD * S + x] - heights[yU * S + x]) * gain;
+            var inv = 1 / Math.sqrt(gx * gx + gy * gy + 1);
+            px[i * 4] = (0.5 - gx * inv * 0.5) * 255;
+            px[i * 4 + 1] = (0.5 + gy * inv * 0.5) * 255;
+            px[i * 4 + 2] = (0.5 + inv * 0.5) * 255;
+            px[i * 4 + 3] = 255;
+        }
+    }
+    ctx.putImageData(img, 0, 0);
+    if (rot > 0) {
+        var rcv = document.createElement('canvas'); rcv.width = S; rcv.height = S;
+        var rctx = rcv.getContext('2d');
+        rctx.translate(S / 2, S / 2); rctx.rotate(rot * Math.PI / 2); rctx.drawImage(cv, -S / 2, -S / 2);
+        cv = rcv;
+    }
+    var tex = new THREE.CanvasTexture(cv);
+    textureCache[ck] = tex;
+    return tex;
+}
+
+// Tiny procedural 6-face cube environment map matching the nebula palette so
+// the obsidian dice pick up deep purple/blue/magenta reflections. No assets.
+function createNebulaEnvMap() {
+    if (nebulaEnvMap) return nebulaEnvMap;
+    var stops = [
+        ['#1a0b3a', '#0a2a5e', '#6a1b6a'],
+        ['#0a2a5e', '#6a1b6a', '#1a0b3a'],
+        ['#6a1b6a', '#1a0b3a', '#0a2a5e'],
+        ['#14072e', '#3a0f4d', '#0d1c44'],
+        ['#0d1c44', '#14072e', '#3a0f4d'],
+        ['#3a0f4d', '#0d1c44', '#14072e']
+    ];
+    var images = [];
+    for (var f = 0; f < 6; f++) {
+        var cv = document.createElement('canvas'); cv.width = 64; cv.height = 64;
+        var ctx = cv.getContext('2d');
+        var g = ctx.createLinearGradient(0, 0, 64, 64);
+        g.addColorStop(0, stops[f][0]); g.addColorStop(0.55, stops[f][1]); g.addColorStop(1, stops[f][2]);
+        ctx.fillStyle = g; ctx.fillRect(0, 0, 64, 64);
+        var rg = ctx.createRadialGradient(22, 22, 3, 32, 32, 42);
+        rg.addColorStop(0, 'rgba(255,110,235,0.95)');
+        rg.addColorStop(0.3, 'rgba(120,80,255,0.28)');
+        rg.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = rg; ctx.fillRect(0, 0, 64, 64);
+        images.push(cv);
+    }
+    nebulaEnvMap = new THREE.CubeTexture(images);
+    nebulaEnvMap.needsUpdate = true;
+    return nebulaEnvMap;
+}
+
 function getDiceMaterials(faces, state) {
     state = state || 'normal';
-    var key = faces.right + '_' + faces.left + '_' + faces.top + '_' + faces.bottom + '_' + faces.back + '_' + faces.front + '_' + state + '_v5';
+    var key = faces.right + '_' + faces.left + '_' + faces.top + '_' + faces.bottom + '_' + faces.back + '_' + faces.front + '_' + state + '_v6';
     if (materialsCache[key]) return materialsCache[key];
     var emissiveColor = 0x00ff88, intensity = 2.0;
     if (state === 'hover') { emissiveColor = 0xff2fd6; intensity = 1.8; }
@@ -222,13 +321,27 @@ function getDiceMaterials(faces, state) {
     else if (state === 'sinking_one') { emissiveColor = 0xff2f6d; intensity = 1.5; }
     else if (state === 'rising') { emissiveColor = 0x33ccff; intensity = 1.6; }
     else if (state === 'locked') { emissiveColor = 0x667788; intensity = 0.5; }
+    var env = createNebulaEnvMap();
+    function faceMat(fv, rot) {
+        return new THREE.MeshStandardMaterial({
+            map: getDiceTexture(fv, state, rot),
+            emissive: emissiveColor,
+            emissiveMap: getDiceEmissiveTexture(fv, state, rot),
+            emissiveIntensity: intensity,
+            roughness: 0.4,
+            metalness: 0.7,
+            envMap: env,
+            envMapIntensity: 0.55,
+            normalMap: getDiceNormalTexture(fv, rot)
+        });
+    }
     var mats = [
-        new THREE.MeshStandardMaterial({ map: getDiceTexture(faces.right, state, 0), emissive: emissiveColor, emissiveMap: getDiceEmissiveTexture(faces.right, state, 0), emissiveIntensity: intensity, roughness: 0.3, metalness: 0.7 }),
-        new THREE.MeshStandardMaterial({ map: getDiceTexture(faces.left, state, 0), emissive: emissiveColor, emissiveMap: getDiceEmissiveTexture(faces.left, state, 0), emissiveIntensity: intensity, roughness: 0.3, metalness: 0.7 }),
-        new THREE.MeshStandardMaterial({ map: getDiceTexture(faces.top, state, 1), emissive: emissiveColor, emissiveMap: getDiceEmissiveTexture(faces.top, state, 1), emissiveIntensity: intensity, roughness: 0.3, metalness: 0.7 }),
-        new THREE.MeshStandardMaterial({ map: getDiceTexture(faces.bottom, state, 1), emissive: emissiveColor, emissiveMap: getDiceEmissiveTexture(faces.bottom, state, 1), emissiveIntensity: intensity, roughness: 0.3, metalness: 0.7 }),
-        new THREE.MeshStandardMaterial({ map: getDiceTexture(faces.front, state, 0), emissive: emissiveColor, emissiveMap: getDiceEmissiveTexture(faces.front, state, 0), emissiveIntensity: intensity, roughness: 0.3, metalness: 0.7 }),
-        new THREE.MeshStandardMaterial({ map: getDiceTexture(faces.back, state, 0), emissive: emissiveColor, emissiveMap: getDiceEmissiveTexture(faces.back, state, 0), emissiveIntensity: intensity, roughness: 0.3, metalness: 0.7 })
+        faceMat(faces.right, 0),
+        faceMat(faces.left, 0),
+        faceMat(faces.top, 1),
+        faceMat(faces.bottom, 1),
+        faceMat(faces.front, 0),
+        faceMat(faces.back, 0)
     ];
     if (state === 'sinking' || state === 'sinking_one') mats.forEach(function(m) { m.transparent = true; m.opacity = 1.0; });
     materialsCache[key] = mats; return mats;
@@ -388,16 +501,21 @@ function initEngine() {
     worldGroup = new THREE.Group(); boardGroup = new THREE.Group(); diceGroup = new THREE.Group();
     worldGroup.add(boardGroup); worldGroup.add(diceGroup); scene.add(worldGroup);
     renderer = new THREE.WebGLRenderer({ antialias: true }); renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // Real shadow maps are intentionally OFF (software-GL perf); depth is
+    // conveyed via point-light falloff + emissive response instead.
+    renderer.shadowMap.enabled = false;
     renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.0;
     container.appendChild(renderer.domElement);
     setupOrthoCamera();
-    initNebula(); initStardust(); initAura(); createComposer();
+    initNebula(); initStardust(); initAura(); initTrails(); createComposer();
     var al = new THREE.AmbientLight(0x8899ff, 0.5); scene.add(al);
-    var dl = new THREE.DirectionalLight(0xddeeff, 0.9); dl.position.set(8, 14, 5); dl.castShadow = true;
-    dl.shadow.mapSize.width = 1024; dl.shadow.mapSize.height = 1024; dl.shadow.camera.near = 0.5; dl.shadow.camera.far = 50;
-    var dd = 10; dl.shadow.camera.left = -dd; dl.shadow.camera.right = dd; dl.shadow.camera.top = dd; dl.shadow.camera.bottom = -dd; scene.add(dl);
+    var dl = new THREE.DirectionalLight(0xddeeff, 0.9); dl.position.set(8, 14, 5); scene.add(dl);
     var pl = new THREE.PointLight(0xff2fd6, 0.6, 28); pl.position.set(-4, 3, -4); scene.add(pl);
+    dynamicLight = new THREE.PointLight(0xff2fd6, 1.2, 14, 1.8);
+    dynamicLight.position.set(0, 8, 0);
+    dynamicLight.visible = false;
+    scene.add(dynamicLight);
     buildBoard(); window.addEventListener('resize', onWindowResize, false);
 }
 
@@ -428,6 +546,13 @@ function buildBoard() {
     boardGroup.clear(); var bw = GRID_COLS * GRID_SPACING, bh = GRID_ROWS * GRID_SPACING;
     var bezelGeom = new THREE.BoxGeometry(bw + 0.4, 0.4, bh + 0.4), bezelMat = new THREE.MeshPhongMaterial({ color: 0x0c0916, specular: 0x334466, shininess: 60 });
     var bezel = new THREE.Mesh(bezelGeom, bezelMat); bezel.position.y = -0.2; bezel.receiveShadow = true; boardGroup.add(bezel);
+    bezelMat.envMap = createNebulaEnvMap();
+    bezelMat.reflectivity = 0.35;
+    var rimMat = new THREE.LineBasicMaterial({ color: 0xff2fd6, transparent: true, opacity: 0.45, depthTest: true });
+    var rim = new THREE.LineSegments(new THREE.EdgesGeometry(bezelGeom), rimMat);
+    rim.position.y = -0.2;
+    rim.renderOrder = 3;
+    boardGroup.add(rim);
     sinkingHighlights = Array(GRID_COLS).fill(null).map(function() { return Array(GRID_ROWS).fill(null); });
     var hlGeom = new THREE.PlaneGeometry(GRID_SPACING - 0.12, GRID_SPACING - 0.12);
     var hlMat = new THREE.MeshBasicMaterial({ color: 0xff3366, transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthTest: false });
@@ -504,36 +629,40 @@ function initNebula() {
             '}',
             'float fbm(vec2 p) {',
             '    float v = 0.0; float amp = 0.5;',
-            '    for (int i = 0; i < 2; i++) { v += amp * noise(p); p *= 2.05; amp *= 0.5; }',
+            '    for (int i = 0; i < 3; i++) { v += amp * noise(p); p = p * 2.05 + vec2(13.7, 7.3); amp *= 0.5; }',
             '    return v;',
             '}',
             'void main() {',
             '    vec2 p = vec2(vUv.x * uAspect, vUv.y) * 2.0 - vec2(uAspect, 1.0);',
             '    float t = uTime * 0.035;',
-            '    float n1 = fbm(p * 1.5 + vec2(t, -t * 0.7));',
-            '    float n2 = fbm(p * 2.6 - vec2(t * 0.8, t * 0.5) + n1 * 1.2);',
-            '    float n3 = fbm(p * 4.1 + vec2(t * 0.5, -t) + n2 * 1.5);',
-            '    float swirl = n1 * 0.55 + n2 * 0.3 + n3 * 0.15;',
-            '    vec3 c1 = vec3(0.09, 0.045, 0.20);',
-            '    vec3 c2 = vec3(0.17, 0.09, 0.40);',
-            '    vec3 c3 = vec3(0.08, 0.32, 0.52);',
-            '    vec3 col = mix(c1, c2, smoothstep(0.12, 0.7, swirl));',
-            '    col = mix(col, c3, smoothstep(0.55, 0.95, swirl));',
-            '    float star = step(0.994, hash(floor(p * 16.0)));',
-            '    vec2 starCell = floor(p * 16.0);',
-            '    star *= 0.45 + 0.55 * sin(uTime * 1.5 + starCell.x * 7.0);',
-            '    col += vec3(0.7, 0.9, 1.0) * star * 0.3;',
+            '    float ang = uTime * 0.02;',
+            '    float ca = cos(ang); float sa = sin(ang);',
+            '    vec2 q = vec2(ca * p.x - sa * p.y, sa * p.x + ca * p.y);',
+            '    vec2 drift = vec2(t * 0.6, t * 0.4);',
+            '    float n1 = fbm(q * 1.2 + drift);',
+            '    float n2 = fbm(q * 2.1 - drift * 0.8 + n1 * 1.1);',
+            '    float n3 = fbm(q * 3.6 + drift * 0.5 + n2 * 1.3);',
+            '    float swirl = n1 * 0.5 + n2 * 0.32 + n3 * 0.18;',
+            '    vec3 c1 = vec3(0.102, 0.043, 0.227);',
+            '    vec3 c2 = vec3(0.039, 0.165, 0.369);',
+            '    vec3 c3 = vec3(0.416, 0.106, 0.416);',
+            '    vec3 col = mix(c1, c2, smoothstep(0.18, 0.72, swirl));',
+            '    col = mix(col, c3, smoothstep(0.62, 0.95, swirl));',
+            '    vec2 sc = floor(p * 18.0);',
+            '    float star = step(0.9965, hash(sc));',
+            '    star *= 0.5 + 0.5 * sin(uTime * 1.6 + hash(sc + 7.0) * 40.0);',
+            '    col += vec3(0.75, 0.85, 1.0) * star * 0.32;',
+            '    col *= 0.9 + 0.1 * smoothstep(1.3, 0.4, length(p * vec2(0.8, 1.0)));',
             '    gl_FragColor = vec4(col, 1.0);',
             '}'
         ].join('\n'),
         depthWrite: false, depthTest: false, fog: false
     });
-    var geom = new THREE.PlaneGeometry(1, 1);
-    nebulaMesh = new THREE.Mesh(geom, nebulaMat);
-    nebulaMesh.position.set(0, 0, -16);
+    // The shader mesh lives only in the low-res RT scene: a 2x2 plane under an
+    // ortho -1..1 camera fills the entire render target with vUv 0..1.
+    nebulaMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), nebulaMat);
     nebulaMesh.renderOrder = -10;
     nebulaMesh.frustumCulled = false;
-    scene.add(nebulaMesh);
     // Low-res render target: the nebula shader is animated every frame, so
     // render it at reduced resolution (1/4 linear = 1/16 pixels) and blit it
     // up. fbm noise on a dark background is indistinguishable at low res and
@@ -547,10 +676,9 @@ function initNebula() {
     var rtH = Math.max(64, Math.floor(window.innerHeight / 4));
     nebulaRT = new THREE.WebGLRenderTarget(rtW, rtH, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat });
     nebulaScreen = new THREE.Mesh(
-        new THREE.PlaneGeometry(1, 1),
+        new THREE.PlaneGeometry(2, 2),
         new THREE.MeshBasicMaterial({ map: nebulaRT.texture, depthWrite: false, depthTest: false, fog: false })
     );
-    nebulaScreen.position.set(0, 0, -15.8);
     nebulaScreen.renderOrder = -10;
     nebulaScreen.frustumCulled = false;
     scene.add(nebulaScreen);
@@ -563,8 +691,6 @@ function resizeNebula() {
     var halfH = boardHalf, halfV = boardHalf;
     if (aspect < 1) halfV = boardHalf / aspect;
     else halfH = boardHalf * aspect;
-    nebulaMesh.scale.set(halfH * 2.4, halfV * 2.4, 1);
-    nebulaMesh.lookAt(camera.position);
     if (nebulaMat && nebulaMat.uniforms) nebulaMat.uniforms.uAspect.value = window.innerWidth / Math.max(1, window.innerHeight);
     if (nebulaRT) {
         var rtW = Math.max(64, Math.floor(window.innerWidth / 4));
@@ -572,8 +698,14 @@ function resizeNebula() {
         nebulaRT.setSize(rtW, rtH);
     }
     if (nebulaScreen) {
-        nebulaScreen.scale.set(halfH * 2.4, halfV * 2.4, 1);
+        // True fullscreen blit: center the quad on the camera's view axis and
+        // size it to the ortho frustum cross-section (plus margin) so no edge
+        // can ever show, at any aspect ratio or camera angle.
+        camera.updateMatrixWorld(true);
+        _nebulaFwd.set(0, 0, -1).applyQuaternion(camera.quaternion);
+        nebulaScreen.position.copy(camera.position).addScaledVector(_nebulaFwd, 42);
         nebulaScreen.lookAt(camera.position);
+        nebulaScreen.scale.set(halfH * 2.08, halfV * 2.08, 1);
     }
 }
 function updateNebula() {
@@ -653,7 +785,45 @@ function ensureCircuitTrace(bw, bh) {
         for (var j = 0; j < 40; j++) { ctx.beginPath(); ctx.arc(Math.random() * 256, Math.random() * 256, 2 + Math.random() * 2, 0, Math.PI * 2); ctx.fill(); }
         var tex = new THREE.CanvasTexture(cv);
         tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-        circuitTraceMat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.14, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, side: THREE.DoubleSide });
+        circuitTraceMat = new THREE.ShaderMaterial({
+            uniforms: {
+                map: { value: tex },
+                uTime: { value: 0 },
+                uOffset: { value: new THREE.Vector2(0, 0) },
+                uLightPos: { value: new THREE.Vector3(0, 0, 0) },
+                uLightStrength: { value: 0 }
+            },
+            vertexShader: [
+                'varying vec2 vUv;',
+                'varying vec3 vWorldPos;',
+                'void main() {',
+                '    vUv = uv;',
+                '    vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;',
+                '    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);',
+                '}'
+            ].join('\n'),
+            fragmentShader: [
+                'uniform sampler2D map;',
+                'uniform float uTime;',
+                'uniform vec2 uOffset;',
+                'uniform vec3 uLightPos;',
+                'uniform float uLightStrength;',
+                'varying vec2 vUv;',
+                'varying vec3 vWorldPos;',
+                'void main() {',
+                '    vec2 tuv = vUv + uOffset;',
+                '    vec4 texel = texture2D(map, tuv);',
+                '    float pulse = 0.5 + 0.5 * sin(uTime * 1.6 + (vUv.x * 3.0 + vUv.y * 5.0) * 0.45);',
+                '    vec2 delta = vWorldPos.xz - uLightPos.xz;',
+                '    float d2 = dot(delta, delta);',
+                '    float glow = exp(-d2 * 1.4) * uLightStrength;',
+                '    float alpha = texel.a * (0.13 + 0.11 * pulse) + glow * 0.85;',
+                '    vec3 col = texel.rgb * (1.0 + glow * 1.35);',
+                '    gl_FragColor = vec4(col * alpha, 1.0);',
+                '}'
+            ].join('\n'),
+            transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, side: THREE.DoubleSide
+        });
         circuitTraceMesh = new THREE.Mesh(new THREE.PlaneGeometry(bw + 0.2, bh + 0.2), circuitTraceMat);
         circuitTraceMesh.rotation.x = -Math.PI / 2;
         circuitTraceMesh.position.y = 0.004;
@@ -665,12 +835,23 @@ function ensureCircuitTrace(bw, bh) {
     boardGroup.add(circuitTraceMesh);
 }
 function updateCircuitTrace() {
-    if (!circuitTraceMat) return;
-    circuitPulse = (circuitPulse + 0.02) % (Math.PI * 2);
-    circuitTraceMat.opacity = 0.1 + 0.08 * (0.5 + 0.5 * Math.sin(circuitPulse));
-    if (circuitTraceMat.map) {
-        circuitTraceMat.map.offset.y = (circuitTraceMat.map.offset.y + 0.001) % 1;
-        circuitTraceMat.map.offset.x = (circuitTraceMat.map.offset.x + 0.0004) % 1;
+    if (!circuitTraceMat || !circuitTraceMat.uniforms) return;
+    var u = circuitTraceMat.uniforms;
+    var now = performance.now() * 0.001;
+    circuitPulse = now;
+    if (u.uTime) u.uTime.value = now;
+    if (u.uOffset) {
+        u.uOffset.value.y = (u.uOffset.value.y + 0.0015) % 1;
+        u.uOffset.value.x = (u.uOffset.value.x + 0.0006) % 1;
+    }
+    if (u.uLightPos && u.uLightStrength) {
+        if (dynamicLight && dynamicLight.visible) {
+            u.uLightPos.value.set(dynamicLight.position.x, 0, dynamicLight.position.z);
+            u.uLightStrength.value = Math.min(1, dynamicLight.intensity / 1.2);
+        } else {
+            u.uLightStrength.value *= 0.9;
+            if (u.uLightStrength.value < 0.01) u.uLightStrength.value = 0;
+        }
     }
 }
 
@@ -754,6 +935,134 @@ function updateAuraEmitter() {
     if (emitted < 2 && inputState.curDie && inputState.curDie.pivotGroup) emitAura(inputState.curDie.pivotGroup.position);
 }
 
+// ── Dynamic magenta point light that follows the active/controlled die ──
+function findTrackedDie() {
+    var d;
+    if (inputState && inputState.curDie && inputState.curDie.pivotGroup) return inputState.curDie;
+    for (var x = 0; x < GRID_COLS; x++) for (var y = 0; y < GRID_ROWS; y++) {
+        d = grid[x] && grid[x][y];
+        if (d && d.pivotGroup && (d.state === 'rolling' || d.state === 'sliding')) return d;
+    }
+    return null;
+}
+function updateDynamicLight() {
+    if (!dynamicLight) return;
+    var target = (gameState === 'playing') ? findTrackedDie() : null;
+    var desired = target ? 1 : 0;
+    dynamicLightStrength += (desired - dynamicLightStrength) * 0.15;
+    if (dynamicLightStrength < 0.01) dynamicLightStrength = 0;
+    dynamicLight.visible = dynamicLightStrength > 0.02;
+    if (target) {
+        _dynTargetPos.set(target.pivotGroup.position.x, target.pivotGroup.position.y + 1.15, target.pivotGroup.position.z);
+        dynamicLight.position.copy(_dynTargetPos);
+    }
+    dynamicLight.intensity = 1.2 * dynamicLightStrength;
+}
+
+// ── Glowing magenta particle trail behind active die movement ──
+function initTrails() {
+    if (trailPoints) return;
+    var positions = new Float32Array(TRAIL_MAX_PARTICLES * 3);
+    var colors = new Float32Array(TRAIL_MAX_PARTICLES * 3);
+    var geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    var mat = new THREE.PointsMaterial({
+        size: 0.13, vertexColors: true, transparent: true, opacity: 0.95,
+        blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, sizeAttenuation: true
+    });
+    trailPoints = new THREE.Points(geom, mat);
+    trailPoints.renderOrder = 5;
+    trailPoints.visible = false;
+    trailParts = {
+        life: new Float32Array(TRAIL_MAX_PARTICLES),
+        maxLife: new Float32Array(TRAIL_MAX_PARTICLES),
+        vx: new Float32Array(TRAIL_MAX_PARTICLES),
+        vy: new Float32Array(TRAIL_MAX_PARTICLES),
+        vz: new Float32Array(TRAIL_MAX_PARTICLES)
+    };
+    trailHead = 0; trailLiveCount = 0;
+    trailLastTime = performance.now();
+    scene.add(trailPoints);
+}
+function emitTrailBurst(wx, wy, wz, count) {
+    if (!trailPoints) initTrails();
+    var pos = trailPoints.geometry.attributes.position;
+    var col = trailPoints.geometry.attributes.color;
+    for (var k = 0; k < count; k++) {
+        var i = trailHead;
+        trailHead = (trailHead + 1) % TRAIL_MAX_PARTICLES;
+        if (trailParts.life[i] <= 0) trailLiveCount++;
+        var ang = Math.random() * Math.PI * 2;
+        var sp = 0.25 + Math.random() * 0.55;
+        trailParts.vx[i] = Math.cos(ang) * sp;
+        trailParts.vz[i] = Math.sin(ang) * sp;
+        trailParts.vy[i] = 0.35 + Math.random() * 0.7;
+        trailParts.life[i] = trailParts.maxLife[i] = 0.5 + Math.random() * 0.5;
+        pos.array[i * 3] = wx + (Math.random() - 0.5) * 0.16;
+        pos.array[i * 3 + 1] = wy + (Math.random() - 0.5) * 0.16;
+        pos.array[i * 3 + 2] = wz + (Math.random() - 0.5) * 0.16;
+        col.array[i * 3] = 1.0; col.array[i * 3 + 1] = 0.19; col.array[i * 3 + 2] = 0.84;
+    }
+    trailPoints.visible = true;
+}
+function updateTrails(dt) {
+    if (!trailPoints || trailLiveCount <= 0) return;
+    var pos = trailPoints.geometry.attributes.position;
+    var col = trailPoints.geometry.attributes.color;
+    for (var i = 0; i < TRAIL_MAX_PARTICLES; i++) {
+        if (trailParts.life[i] <= 0) {
+            if (col.array[i * 3] !== 0) {
+                col.array[i * 3] = 0; col.array[i * 3 + 1] = 0; col.array[i * 3 + 2] = 0;
+            }
+            continue;
+        }
+        trailParts.life[i] -= dt;
+        pos.array[i * 3] += trailParts.vx[i] * dt;
+        pos.array[i * 3 + 1] += trailParts.vy[i] * dt;
+        pos.array[i * 3 + 2] += trailParts.vz[i] * dt;
+        trailParts.vy[i] -= 0.55 * dt;
+        if (trailParts.life[i] <= 0) {
+            trailParts.life[i] = 0;
+            trailLiveCount--;
+            col.array[i * 3] = 0; col.array[i * 3 + 1] = 0; col.array[i * 3 + 2] = 0;
+        } else {
+            var f = trailParts.life[i] / trailParts.maxLife[i];
+            col.array[i * 3] = f; col.array[i * 3 + 1] = 0.19 * f; col.array[i * 3 + 2] = 0.84 * f;
+        }
+    }
+    pos.needsUpdate = true;
+    col.needsUpdate = true;
+    trailPoints.visible = trailLiveCount > 0;
+}
+function updateTrailEmitter() {
+    if (gameState !== 'playing') return;
+    if (!trailPoints) initTrails();
+    var emitted = 0;
+    for (var x = 0; x < GRID_COLS && emitted < 4; x++) {
+        for (var y = 0; y < GRID_ROWS && emitted < 4; y++) {
+            var d = grid[x] && grid[x][y];
+            if (!d || !d.pivotGroup) continue;
+            var moving = d.state === 'rolling' || d.state === 'sliding';
+            if (moving) {
+                if (!d.wasMoving) {
+                    d.wasMoving = true;
+                    emitTrailBurst(d.pivotGroup.position.x, d.pivotGroup.position.y + 0.25, d.pivotGroup.position.z, 7);
+                    emitted++;
+                } else if (Math.random() < 0.45) {
+                    emitTrailBurst(d.pivotGroup.position.x, d.pivotGroup.position.y + 0.15, d.pivotGroup.position.z, 1);
+                    emitted++;
+                }
+            } else {
+                d.wasMoving = false;
+            }
+        }
+    }
+    if (inputState.isHolding && inputState.curDie && inputState.curDie.pivotGroup) {
+        emitTrailBurst(inputState.curDie.pivotGroup.position.x, inputState.curDie.pivotGroup.position.y + 0.15, inputState.curDie.pivotGroup.position.z, 1);
+    }
+}
+
 function setBoardSize(sizeKey) { if (!BOARD_PRESETS[sizeKey]) return; var preset = BOARD_PRESETS[sizeKey]; boardSize = sizeKey; GRID_COLS = preset.cols; GRID_ROWS = preset.rows; totalCells = GRID_COLS * GRID_ROWS; grid = Array(GRID_COLS).fill(null).map(function() { return Array(GRID_ROWS).fill(null); }); buildBoard(); setupOrthoCamera(); resizeNebula(); }
 
 function battleAwardScore(points) {
@@ -822,7 +1131,7 @@ function findRollableDie() { var cx = Math.floor(GRID_COLS / 2), cy = Math.floor
 function showGestureHint(txt) { var h = document.getElementById('gesture-hint'); document.getElementById('hint-text').innerText = txt; h.classList.remove('gesture-hide'); }
 function hideGestureHint() { document.getElementById('gesture-hint').classList.add('gesture-hide'); }
 
-function startGame(mode) { AudioEngine.stopMenuMusic(); mode = mode || 'zen'; AudioEngine.init(); gameState = 'playing'; gameMode = mode; score = 0; comboCount = 0; animationLock = false; hideAiMoveMarker(); updateScoreDisplay(); hideComboBanner(); hideGestureHint(); initStardust(); initAura(); document.getElementById('menu-screen').classList.remove('active'); document.getElementById('pause-screen').classList.remove('active'); document.getElementById('gameover-screen').classList.remove('active'); document.getElementById('hud-screen').classList.add('active'); document.getElementById('puzzle-hud').style.display = (mode === 'puzzle') ? 'flex' : 'none'; document.getElementById('battle-hud').style.display = (mode === 'battle') ? 'flex' : 'none'; document.getElementById('hud-screen').classList.toggle('hide-highscore', mode === 'battle'); document.getElementById('battle-timer-box').style.display = (mode === 'battle') ? 'block' : 'none'; if (mode === 'puzzle') setupPuzzleMode(); else if (mode === 'battle') setupBattleMode();    else { populateInitialBoard(); startSpawning(); initZenEffects(); } if (musicEnabled) { AudioEngine.stopBGM(); AudioEngine.startBGM(); } updateFullnessBar(countActiveDice() / totalCells); }
+function startGame(mode) { AudioEngine.stopMenuMusic(); mode = mode || 'zen'; AudioEngine.init(); gameState = 'playing'; gameMode = mode; score = 0; comboCount = 0; animationLock = false; hideAiMoveMarker(); updateScoreDisplay(); hideComboBanner(); hideGestureHint(); initStardust(); initAura(); initTrails(); document.getElementById('menu-screen').classList.remove('active'); document.getElementById('pause-screen').classList.remove('active'); document.getElementById('gameover-screen').classList.remove('active'); document.getElementById('hud-screen').classList.add('active'); document.getElementById('puzzle-hud').style.display = (mode === 'puzzle') ? 'flex' : 'none'; document.getElementById('battle-hud').style.display = (mode === 'battle') ? 'flex' : 'none'; document.getElementById('hud-screen').classList.toggle('hide-highscore', mode === 'battle'); document.getElementById('battle-timer-box').style.display = (mode === 'battle') ? 'block' : 'none'; if (mode === 'puzzle') setupPuzzleMode(); else if (mode === 'battle') setupBattleMode();    else { populateInitialBoard(); startSpawning(); initZenEffects(); } if (musicEnabled) { AudioEngine.stopBGM(); AudioEngine.startBGM(); } updateFullnessBar(countActiveDice() / totalCells); }
 function startSpawning() { stopSpawning(); spawnTimerId = setTimeout(spawnRandomDie, DIFFICULTY_SETTINGS[selectedDifficulty].spawnInterval); }
 function pauseGame() { if (gameState !== 'playing') return; gameState = 'paused'; stopSpawning(); AudioEngine.stopBGM(); document.getElementById('hud-screen').classList.remove('active'); document.getElementById('pause-screen').classList.add('active'); }
 function resumeGame() { if (gameState !== 'paused') return; gameState = 'playing'; document.getElementById('pause-screen').classList.remove('active'); document.getElementById('hud-screen').classList.add('active'); if (gameMode !== 'puzzle') startSpawning(); if (musicEnabled) AudioEngine.startBGM(); }
@@ -1078,6 +1387,15 @@ function clearZenEffects() {
         stardustPoints.geometry.dispose();
         stardustPoints.material.dispose();
         stardustPoints = null;
+    }
+    if (trailPoints) {
+        scene.remove(trailPoints);
+        trailPoints.geometry.dispose();
+        trailPoints.material.dispose();
+        trailPoints = null;
+        trailParts = null;
+        trailHead = 0;
+        trailLiveCount = 0;
     }
     if (auraPoints) {
         scene.remove(auraPoints);
@@ -1356,8 +1674,8 @@ function hideComboBanner() { document.getElementById('combo-display').classList.
 
 function setupControlListeners() { window.addEventListener('keydown', handleKeyboard); setupPointerEvents(); document.getElementById('zen-btn').addEventListener('click', function() { startGame('zen'); }); document.getElementById('puzzle-btn').addEventListener('click', function() { startGame('puzzle'); }); document.getElementById('battle-btn').addEventListener('click', function() { startGame('battle'); }); document.getElementById('how-to-btn').addEventListener('click', function() { document.getElementById('how-to-modal').classList.add('active'); }); document.getElementById('close-how-to').addEventListener('click', function() { document.getElementById('how-to-modal').classList.remove('active'); }); document.getElementById('settings-btn').addEventListener('click', function() { document.getElementById('board-size').value = boardSize; document.getElementById('sound-toggle').checked = soundEnabled; document.getElementById('music-toggle').checked = musicEnabled; document.getElementById('difficulty').value = selectedDifficulty; document.getElementById('ai-difficulty').value = aiDifficulty; document.getElementById('battle-duration').value = battleDuration; document.getElementById('settings-modal').classList.add('active'); }); document.getElementById('close-settings').addEventListener('click', function() { soundEnabled = document.getElementById('sound-toggle').checked; var mc = document.getElementById('music-toggle').checked; if (mc !== musicEnabled) { musicEnabled = mc; if (gameState === 'playing') { if (musicEnabled) AudioEngine.startBGM(); else AudioEngine.stopBGM(); } else if (gameState === 'menu') { if (musicEnabled) AudioEngine.startMenuMusic(); else AudioEngine.stopMenuMusic(); } } selectedDifficulty = document.getElementById('difficulty').value; aiDifficulty = document.getElementById('ai-difficulty').value; battleDuration = parseInt(document.getElementById('battle-duration').value); var newBoardSize = document.getElementById('board-size').value; if (newBoardSize !== boardSize) { stopSpawning(); clearAllDice(); setBoardSize(newBoardSize); if (gameState === 'playing') startGame(gameMode); else quitToMenu(); } document.getElementById('settings-modal').classList.remove('active'); }); document.getElementById('pause-btn').addEventListener('click', pauseGame); document.getElementById('resume-btn').addEventListener('click', resumeGame); document.getElementById('restart-pause-btn').addEventListener('click', function() { startGame(gameMode); }); document.getElementById('quit-btn').addEventListener('click', quitToMenu); document.getElementById('retry-btn').addEventListener('click', function() { startGame(gameMode); }); document.getElementById('menu-quit-btn').addEventListener('click', quitToMenu); }
 
-var _frameCount = 0, _lastFpsTime = performance.now(), _currentFPS = 60;
-function gameLoop() { requestAnimationFrame(gameLoop); _frameCount++; var now = performance.now(); if (now - _lastFpsTime >= 1000) { _currentFPS = Math.round(_frameCount * 1000 / (now - _lastFpsTime)); _frameCount = 0; _lastFpsTime = now; } updateNebula(); updateStardust(); updateCircuitTrace(); updateAuraEmitter(); updateAura(); if (renderer && scene && camera) { if (composer) composer.render(); else renderer.render(scene, camera); } if (gameState === 'playing') { updateSinkingDice(); updateSinkingHighlights(); updateZenEffects(); updateAiMoveMarker(); var activeCount = countActiveDice(); updateFullnessBar(activeCount / totalCells); if (gameMode !== 'battle' && activeCount >= totalCells) triggerGameOver(); if (gameMode === 'battle') updateFreezeDisplay(); } }
+var _frameCount = 0, _lastFpsTime = performance.now(), _currentFPS = 60, _lastFrameTime = performance.now();
+function gameLoop() { requestAnimationFrame(gameLoop); _frameCount++; var now = performance.now(); if (now - _lastFpsTime >= 1000) { _currentFPS = Math.round(_frameCount * 1000 / (now - _lastFpsTime)); _frameCount = 0; _lastFpsTime = now; } var dt = Math.min((now - _lastFrameTime) / 1000, 0.05); _lastFrameTime = now; updateNebula(); updateStardust(); updateDynamicLight(); updateCircuitTrace(); updateTrailEmitter(); updateTrails(dt); updateAuraEmitter(); updateAura(); if (renderer && scene && camera) { if (composer) composer.render(); else renderer.render(scene, camera); } if (gameState === 'playing') { updateSinkingDice(); updateSinkingHighlights(); updateZenEffects(); updateAiMoveMarker(); var activeCount = countActiveDice(); updateFullnessBar(activeCount / totalCells); if (gameMode !== 'battle' && activeCount >= totalCells) triggerGameOver(); if (gameMode === 'battle') updateFreezeDisplay(); } }
 function updateSinkingHighlights() { for (var x = 0; x < GRID_COLS; x++) for (var y = 0; y < GRID_ROWS; y++) { var hl = sinkingHighlights[x] && sinkingHighlights[x][y]; if (hl) { var die = grid[x] && grid[x][y]; hl.visible = !!(die && die.state === 'sinking'); } } }
 
 window.onload = function() { document.getElementById('menu-highscore').innerText = Number(highScore).toLocaleString(); initEngine(); setupControlListeners(); gameLoop(); AudioEngine.startMenuMusic(); };
