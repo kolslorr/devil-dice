@@ -13,7 +13,7 @@ html, body {
     width: 100%;
     height: 100%;
     overflow: hidden;
-    background-color: #0c0810;
+    background: radial-gradient(ellipse at 50% 18%, #1a0b2e 0%, #0a0614 55%, #030208 100%);
     color: #f0f0f5;
     position: fixed;
     touch-action: none; /* Prevent browser gestures on the game surface */
@@ -95,7 +95,9 @@ html, body {
     left: 0;
     width: 100%;
     height: 100%;
-    background: rgba(12, 8, 16, 0.95);
+    background: rgba(8, 4, 16, 0.55);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
     display: none;
     justify-content: center;
     align-items: center;
@@ -108,22 +110,24 @@ html, body {
 }
 
 .modal-content {
-    background: #181223;
-    border: 3px solid #ff3366;
-    border-radius: 8px;
+    background: rgba(26, 16, 44, 0.55);
+    border: 1px solid rgba(255, 51, 204, 0.45);
+    border-radius: 16px;
     padding: 24px;
     max-width: 500px;
     width: 90%;
     max-height: 85%;
     overflow-y: auto;
-    box-shadow: 0 0 20px rgba(255, 51, 102, 0.3);
+    box-shadow: 0 0 26px rgba(255, 51, 204, 0.28), inset 0 0 20px rgba(255, 51, 204, 0.07);
+    backdrop-filter: blur(18px) saturate(150%);
+    -webkit-backdrop-filter: blur(18px) saturate(150%);
 }
 
 .modal h2 {
     color: #ff3366;
     text-align: center;
     margin-bottom: 20px;
-    text-shadow: 0 0 10px rgba(255, 51, 102, 0.5);
+    text-shadow: 0 0 10px rgba(255, 51, 204, 0.6);
 }
 
 .modal-body {
@@ -151,7 +155,7 @@ html, body {
 
 .modal li::before {
     content: "■";
-    color: #ff3366;
+    color: #ff2fd6;
     position: absolute;
     left: 0;
     top: 0;
@@ -173,7 +177,7 @@ html, body {
 
 /* Main Menu Screen */
 #menu-screen {
-    background: radial-gradient(circle, rgba(32,18,48,0.8) 0%, rgba(12,8,16,0.95) 100%);
+    background: radial-gradient(circle, rgba(20, 10, 40, 0.45) 0%, rgba(5, 2, 12, 0.72) 100%);
 }
 
 .menu-content {
@@ -213,40 +217,44 @@ html, body {
     padding: 14px 20px;
     font-size: 16px;
     font-weight: bold;
-    color: #ffffff;
-    background: #1e152d;
-    border: 2px solid #5d4f7c;
-    border-radius: 6px;
+    color: #e9e2ff;
+    background: rgba(28, 18, 50, 0.45);
+    border: 1px solid rgba(140, 120, 255, 0.5);
+    border-radius: 14px;
     cursor: pointer;
     transition: all 0.2s ease;
     text-transform: uppercase;
     touch-action: manipulation;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    box-shadow: 0 0 14px rgba(140, 120, 255, 0.18), inset 0 0 10px rgba(140, 120, 255, 0.06);
+    text-shadow: 0 0 8px rgba(140, 120, 255, 0.35);
 }
 
 .menu-btn:active, .menu-btn:hover {
-    background: #2a1f3d;
-    border-color: #8c7ba8;
-    box-shadow: 0 0 10px rgba(140, 123, 168, 0.2);
+    background: rgba(48, 30, 82, 0.6);
+    border-color: rgba(190, 165, 255, 0.9);
+    box-shadow: 0 0 20px rgba(150, 120, 255, 0.4), inset 0 0 14px rgba(150, 120, 255, 0.12);
 }
 
 .menu-btn.primary {
-    background: #ff3366;
-    border-color: #ff3366;
-    text-shadow: 0 1px 2px rgba(0,0,0,0.5);
-    box-shadow: 0 4px 15px rgba(255, 33, 102, 0.3);
+    background: linear-gradient(135deg, rgba(255, 51, 204, 0.55), rgba(122, 51, 255, 0.55));
+    border-color: rgba(255, 92, 224, 0.9);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 0 10px rgba(255, 51, 204, 0.6);
+    box-shadow: 0 0 20px rgba(255, 51, 204, 0.45);
 }
 
 .menu-btn.primary:active, .menu-btn.primary:hover {
-    background: #ff5588;
-    border-color: #ff5588;
-    box-shadow: 0 0 20px rgba(255, 51, 102, 0.6);
+    background: linear-gradient(135deg, rgba(255, 92, 224, 0.7), rgba(150, 70, 255, 0.7));
+    border-color: #ff9ce8;
+    box-shadow: 0 0 28px rgba(255, 51, 204, 0.7);
 }
 
 .high-score-display {
     font-size: 18px;
     font-weight: bold;
-    color: #ffcc00;
-    text-shadow: 0 0 10px rgba(255, 204, 0, 0.4);
+    color: #ff9ce8;
+    text-shadow: 0 0 10px rgba(255, 79, 216, 0.7), 0 0 22px rgba(255, 51, 204, 0.4);
     letter-spacing: 1px;
 }
 
@@ -266,14 +274,15 @@ html, body {
 }
 
 .setting-row select {
-    background: #1e152d;
-    border: 2px solid #5d4f7c;
+    background: rgba(24, 14, 42, 0.7);
+    border: 1px solid rgba(140, 120, 255, 0.5);
     color: white;
     padding: 8px 12px;
-    border-radius: 4px;
+    border-radius: 10px;
     font-family: inherit;
     font-size: 14px;
     outline: none;
+    box-shadow: inset 0 0 8px rgba(140, 120, 255, 0.1);
 }
 
 .setting-row input[type="checkbox"] {
@@ -281,8 +290,8 @@ html, body {
     -webkit-appearance: none;
     width: 44px;
     height: 24px;
-    background: #2e263d;
-    border: 2px solid #5d4f7c;
+    background: rgba(30, 20, 52, 0.7);
+    border: 1px solid rgba(140, 120, 255, 0.5);
     border-radius: 12px;
     position: relative;
     outline: none;
@@ -291,8 +300,9 @@ html, body {
 }
 
 .setting-row input[type="checkbox"]:checked {
-    background: #ff3366;
-    border-color: #ff3366;
+    background: #ff2fd6;
+    border-color: #ff2fd6;
+    box-shadow: 0 0 12px rgba(255, 47, 214, 0.7);
 }
 
 .setting-row input[type="checkbox"]::before {
@@ -345,13 +355,14 @@ html, body {
 }
 
 .hud-group {
-    background: rgba(12, 8, 16, 0.75);
-    border: 1px solid rgba(93, 79, 124, 0.4);
-    border-radius: 6px;
+    background: rgba(22, 12, 40, 0.42);
+    border: 1px solid rgba(255, 51, 204, 0.35);
+    border-radius: 14px;
     padding: 8px 14px;
     min-width: 120px;
-    backdrop-filter: blur(5px);
-    -webkit-backdrop-filter: blur(5px);
+    backdrop-filter: blur(12px) saturate(150%);
+    -webkit-backdrop-filter: blur(12px) saturate(150%);
+    box-shadow: 0 0 16px rgba(255, 51, 204, 0.2), inset 0 0 14px rgba(255, 51, 204, 0.07);
 }
 
 .hud-group.center {
@@ -365,7 +376,7 @@ html, body {
 
 .hud-label {
     font-size: 10px;
-    color: #8a829e;
+    color: #b9a9d8;
     font-weight: bold;
     letter-spacing: 1px;
     margin-bottom: 4px;
@@ -374,31 +385,55 @@ html, body {
 .hud-value {
     font-size: 20px;
     font-weight: bold;
-    color: #ff3366;
-    text-shadow: 0 0 8px rgba(255, 33, 102, 0.3);
+    color: #ff4fd8;
+    text-shadow: 0 0 6px rgba(255, 79, 216, 0.9), 0 0 18px rgba(255, 51, 204, 0.5);
     letter-spacing: 1px;
 }
 
 #hud-highscore {
-    color: #ffcc00;
-    text-shadow: 0 0 8px rgba(255, 204, 0, 0.3);
+    color: #ff8be0;
+    text-shadow: 0 0 6px rgba(255, 139, 224, 0.9), 0 0 18px rgba(255, 51, 204, 0.45);
 }
 
 .capacity-bar-container {
     width: 100%;
-    height: 10px;
-    background: #251d33;
-    border-radius: 5px;
+    height: 12px;
+    background: rgba(16, 10, 30, 0.55);
+    border-radius: 8px;
     overflow: hidden;
-    border: 1px solid #4a3e66;
+    border: 1px solid rgba(255, 51, 204, 0.35);
+    box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.5), 0 0 12px rgba(255, 51, 204, 0.15);
 }
 
 .capacity-bar {
+    position: relative;
     width: 0%;
     height: 100%;
     background: linear-gradient(90deg, #00ff66 0%, #ffcc00 60%, #ff3366 100%);
-    border-radius: 5px;
+    border-radius: 8px;
     transition: width 0.3s ease;
+    box-shadow: 0 0 10px rgba(0, 255, 102, 0.55);
+}
+
+/* Leading-edge particle dispersal on the fullness bar */
+.capacity-bar::after {
+    content: "";
+    position: absolute;
+    right: -2px;
+    top: 50%;
+    width: 7px;
+    height: 7px;
+    margin-top: -3.5px;
+    border-radius: 50%;
+    background: radial-gradient(circle, #ffffff 0%, rgba(255, 255, 255, 0) 70%);
+    box-shadow: 0 0 8px #ffffff, 0 0 14px #ff9ce8;
+    animation: edgeDisperse 1.2s cubic-bezier(0.2, 0.7, 0.4, 1) infinite;
+}
+
+@keyframes edgeDisperse {
+    0% { transform: translate(0, 0) scale(1); opacity: 0.95; }
+    60% { transform: translate(16px, -8px) scale(0.45); opacity: 0.45; }
+    100% { transform: translate(30px, -16px) scale(0.1); opacity: 0; }
 }
 
 .danger-alarm {
@@ -585,18 +620,45 @@ html, body {
 }
 
 .action-btn.secondary {
-    background: #181223;
-    border-color: #5d4f7c;
-    box-shadow: 0 4px 10px rgba(0,0,0,0.3);
-    padding: 8px 16px;
-    font-size: 11px;
-    width: auto;
+    background: rgba(16, 10, 32, 0.5);
+    border: 1px solid rgba(0, 255, 204, 0.55);
+    border-radius: 50%;
+    box-shadow: 0 0 14px rgba(0, 255, 204, 0.35), inset 0 0 10px rgba(0, 255, 204, 0.15);
+    padding: 0;
+    width: 48px;
+    height: 48px;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    position: relative;
 }
 
 .action-btn.secondary:active {
-    background: #2a1f3d;
-    border-color: #8c7ba8;
-    box-shadow: 0 0 10px rgba(140, 123, 168, 0.3);
+    background: rgba(0, 255, 204, 0.18);
+    border-color: #7dffef;
+    box-shadow: 0 0 24px rgba(0, 255, 204, 0.7), inset 0 0 12px rgba(0, 255, 204, 0.25);
+}
+
+/* Glowing neon pause icon inside the circular button */
+#pause-btn::before,
+#pause-btn::after {
+    content: "";
+    position: absolute;
+    top: 14px;
+    width: 5px;
+    height: 18px;
+    border-radius: 2px;
+    background: #7dffef;
+    box-shadow: 0 0 8px #4dffd9, 0 0 16px rgba(0, 255, 204, 0.8);
+}
+
+#pause-btn::before { left: 16px; }
+#pause-btn::after { right: 16px; }
+
+/* Keep generic action buttons (non-pause) in their previous layout */
+.action-btn:not(.secondary) {
+    width: 120px;
+    padding: 12px;
+    border-radius: 12px;
 }
 
 /* Floating Score Indicators */
@@ -605,8 +667,8 @@ html, body {
     pointer-events: none;
     font-weight: bold;
     font-size: 18px;
-    color: #ffcc00;
-    text-shadow: 0 0 10px rgba(255, 204, 0, 0.6);
+    color: #ff9ce8;
+    text-shadow: 0 0 10px rgba(255, 79, 216, 0.8), 0 0 20px rgba(255, 51, 204, 0.5);
     z-index: 30;
     white-space: nowrap;
 }
@@ -619,19 +681,21 @@ html, body {
 }
 
 .pause-content {
-    background: #181223;
-    border: 3px solid #ffcc00;
-    border-radius: 8px;
+    background: rgba(26, 16, 44, 0.55);
+    border: 1px solid rgba(0, 255, 204, 0.5);
+    border-radius: 18px;
     padding: 30px;
     text-align: center;
     width: 300px;
-    box-shadow: 0 0 20px rgba(255, 204, 0, 0.2);
+    box-shadow: 0 0 26px rgba(0, 255, 204, 0.3), inset 0 0 18px rgba(0, 255, 204, 0.08);
+    backdrop-filter: blur(18px) saturate(150%);
+    -webkit-backdrop-filter: blur(18px) saturate(150%);
 }
 
 .pause-content h2 {
-    color: #ffcc00;
+    color: #7dffef;
     margin-bottom: 24px;
-    text-shadow: 0 0 10px rgba(255, 204, 0, 0.4);
+    text-shadow: 0 0 10px rgba(0, 255, 204, 0.7);
 }
 
 .pause-buttons {
@@ -642,20 +706,22 @@ html, body {
 
 /* Game Over Screen */
 #gameover-screen {
-    background: rgba(12, 8, 16, 0.9);
+    background: rgba(8, 4, 16, 0.6);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
 }
 
 .gameover-content {
-    background: #181223;
-    border: 3px solid #ff3366;
-    border-radius: 8px;
+    background: rgba(26, 16, 44, 0.55);
+    border: 1px solid rgba(255, 51, 204, 0.5);
+    border-radius: 18px;
     padding: 36px;
     text-align: center;
     max-width: 400px;
     width: 90%;
-    box-shadow: 0 0 30px rgba(255, 33, 102, 0.4);
+    box-shadow: 0 0 30px rgba(255, 51, 204, 0.4), inset 0 0 20px rgba(255, 51, 204, 0.08);
+    backdrop-filter: blur(18px) saturate(150%);
+    -webkit-backdrop-filter: blur(18px) saturate(150%);
 }
 
 .gameover-title {
@@ -666,11 +732,12 @@ html, body {
 }
 
 .gameover-stats {
-    background: #0f0a17;
-    border: 1px solid #2e263d;
-    border-radius: 6px;
+    background: rgba(12, 7, 24, 0.55);
+    border: 1px solid rgba(255, 51, 204, 0.25);
+    border-radius: 12px;
     padding: 16px;
     margin: 20px 0;
+    box-shadow: inset 0 0 14px rgba(0, 0, 0, 0.4);
 }
 
 .stat-row {
@@ -685,7 +752,7 @@ html, body {
 }
 
 .stat-row span {
-    color: #8a829e;
+    color: #b9a9d8;
 }
 
 .stat-row strong {
@@ -716,6 +783,16 @@ html, body {
 @keyframes titleGlow {
     0% { text-shadow: 0 0 15px rgba(255,255,255,0.1), 0 0 20px rgba(255, 33, 102, 0.4); }
     100% { text-shadow: 0 0 25px rgba(255,255,255,0.3), 0 0 40px rgba(255, 33, 102, 0.8); }
+}
+
+/* Fallback when backdrop-filter is unsupported (older devices) */
+@supports not (backdrop-filter: blur(1px)) {
+    .hud-group { background: rgba(22, 12, 40, 0.88); }
+    .modal { background: rgba(8, 4, 16, 0.92); }
+    .modal-content { background: rgba(26, 16, 44, 0.94); }
+    .menu-btn { background: rgba(28, 18, 50, 0.9); }
+    .pause-content { background: rgba(26, 16, 44, 0.94); }
+    .gameover-content { background: rgba(26, 16, 44, 0.94); }
 }
 
 /* Responsive adjustments */

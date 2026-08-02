@@ -45,13 +45,13 @@ var STANDARD_ORIENTATIONS = {
 };
 var DIRECTIONS = { north: { dx: 0, dy: -1 }, south: { dx: 0, dy: 1 }, east: { dx: 1, dy: 0 }, west: { dx: -1, dy: 0 } };
 var PALETTE = {
-    boardFloor: 0x140e21, boardGrid: 0x4a3266,
-    normalDie: { bg: '#231c30', pips: '#00ff66', border: '#403454' },
-    sinkingDie: { bg: '#990033', pips: '#ffffff', border: '#ff3366' },
-    risingDie: { bg: '#0e2b45', pips: '#33ccff', border: '#1f5380' },
-    sinkingOne: { bg: '#ffffff', pips: '#ff3366', border: '#ff88aa' },
-    lockedBlock: { bg: '#2a2a2a', pips: '#666666', border: '#444444' },
-    hoverGlow: { bg: '#3a2a50', pips: '#44ff88', border: '#8877aa' }
+    boardFloor: 0x05030c, boardGrid: 0x33ddff,
+    normalDie: { bg: '#0b0814', pips: '#00ff88', border: '#1b2540' },
+    sinkingDie: { bg: '#17001a', pips: '#ff44cc', border: '#ff3366' },
+    risingDie: { bg: '#081522', pips: '#33ccff', border: '#1f5380' },
+    sinkingOne: { bg: '#15050a', pips: '#ff2f6d', border: '#ff88aa' },
+    lockedBlock: { bg: '#101018', pips: '#667788', border: '#333344' },
+    hoverGlow: { bg: '#1c0417', pips: '#ff2fd6', border: '#ff66e0' }
 };
 var CELL_TYPE = { EMPTY: 0, ACTIVE: 1, LOCKED: 2 };
 var scene, camera, renderer, diceGroup, boardGroup, worldGroup;
@@ -77,6 +77,13 @@ var ZEN_AMBIENT_COUNT = 320, zenAmbientPhase = 0, zenAmbientPulse = 0;
 // ── AI battle move marker (gold ring + arrow on the die the AI moves) ──
 var aiMoveMarker = null, aiMarkerDie = null, aiMarkerUntil = 0;
 var AI_MARKER_COLOR = 0xffcc00, AI_MARKER_DURATION = 1100;
+// ── Visual overhaul: bloom, nebula, stardust, circuit traces, aura ──
+var composer = null, renderPass = null, bloomPass = null, vignettePass = null;
+var BLOOM_STRENGTH = 0.6, BLOOM_RADIUS = 0.3, BLOOM_THRESHOLD = 0.8;
+var nebulaMesh = null, nebulaMat = null, nebulaScene = null, nebulaCam = null, nebulaRT = null, nebulaScreen = null;
+var stardustPoints = null, stardustPhase = 0, STARDUST_COUNT = 180;
+var circuitTraceMesh = null, circuitTraceMat = null, circuitPulse = 0;
+var auraPoints = null, AURA_MAX_PARTICLES = 48;
 
 var AudioEngine = {
     init: function() { if (audioCtx) return; try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) {} },
@@ -186,17 +193,42 @@ function getDiceTexture(value, state, rot) {
     var tex = new THREE.CanvasTexture(cv); textureCache[ck] = tex; return tex;
 }
 
+// Emissive-only texture: black base with bright pips so the bloom pass picks
+// up only the neon pips, not the dark die body.
+function getDiceEmissiveTexture(value, state, rot) {
+    rot = rot || 0; state = state || 'normal'; var ck = 'e_' + value + '_' + state + '_r' + rot; if (textureCache[ck]) return textureCache[ck];
+    var cv = document.createElement('canvas'); cv.width = 128; cv.height = 128; var ctx = cv.getContext('2d');
+    var colors = PALETTE.normalDie;
+    if (state === 'sinking') colors = PALETTE.sinkingDie; if (state === 'rising') colors = PALETTE.risingDie;
+    if (state === 'sinking_one') colors = PALETTE.sinkingOne; if (state === 'locked') colors = PALETTE.lockedBlock;
+    if (state === 'hover') colors = PALETTE.hoverGlow;
+    ctx.clearRect(0, 0, 128, 128);
+    ctx.fillStyle = '#ffffff'; ctx.shadowBlur = 4; ctx.shadowColor = colors.pips;
+    var pipR = 10, pad = 32;
+    var pos = { c: [64, 64], tl: [pad, pad], tr: [128 - pad, pad], bl: [pad, 128 - pad], br: [128 - pad, 128 - pad], ml: [pad, 64], mr: [128 - pad, 64] };
+    function dp(p) { ctx.beginPath(); ctx.arc(p[0], p[1], pipR, 0, Math.PI * 2); ctx.fill(); }
+    switch (value) { case 1: dp(pos.c); break; case 2: dp(pos.tl); dp(pos.br); break; case 3: dp(pos.tl); dp(pos.c); dp(pos.br); break; case 4: dp(pos.tl); dp(pos.tr); dp(pos.bl); dp(pos.br); break; case 5: dp(pos.tl); dp(pos.tr); dp(pos.c); dp(pos.bl); dp(pos.br); break; case 6: dp(pos.tl); dp(pos.tr); dp(pos.ml); dp(pos.mr); dp(pos.bl); dp(pos.br); break; }
+    if (rot > 0) { var rcv = document.createElement('canvas'); rcv.width = 128; rcv.height = 128; var rctx = rcv.getContext('2d'); rctx.translate(64, 64); rctx.rotate(rot * Math.PI / 2); rctx.drawImage(cv, -64, -64); cv = rcv; }
+    var tex = new THREE.CanvasTexture(cv); textureCache[ck] = tex; return tex;
+}
+
 function getDiceMaterials(faces, state) {
     state = state || 'normal';
-    var key = faces.right + '_' + faces.left + '_' + faces.top + '_' + faces.bottom + '_' + faces.back + '_' + faces.front + '_' + state + '_v3';
+    var key = faces.right + '_' + faces.left + '_' + faces.top + '_' + faces.bottom + '_' + faces.back + '_' + faces.front + '_' + state + '_v5';
     if (materialsCache[key]) return materialsCache[key];
+    var emissiveColor = 0x00ff88, intensity = 2.0;
+    if (state === 'hover') { emissiveColor = 0xff2fd6; intensity = 1.8; }
+    else if (state === 'sinking') { emissiveColor = 0xff44cc; intensity = 1.5; }
+    else if (state === 'sinking_one') { emissiveColor = 0xff2f6d; intensity = 1.5; }
+    else if (state === 'rising') { emissiveColor = 0x33ccff; intensity = 1.6; }
+    else if (state === 'locked') { emissiveColor = 0x667788; intensity = 0.5; }
     var mats = [
-        new THREE.MeshLambertMaterial({ map: getDiceTexture(faces.right, state, 0) }),
-        new THREE.MeshLambertMaterial({ map: getDiceTexture(faces.left, state, 0) }),
-        new THREE.MeshLambertMaterial({ map: getDiceTexture(faces.top, state, 1) }),
-        new THREE.MeshLambertMaterial({ map: getDiceTexture(faces.bottom, state, 1) }),
-        new THREE.MeshLambertMaterial({ map: getDiceTexture(faces.front, state, 0) }),
-        new THREE.MeshLambertMaterial({ map: getDiceTexture(faces.back, state, 0) })
+        new THREE.MeshStandardMaterial({ map: getDiceTexture(faces.right, state, 0), emissive: emissiveColor, emissiveMap: getDiceEmissiveTexture(faces.right, state, 0), emissiveIntensity: intensity, roughness: 0.3, metalness: 0.7 }),
+        new THREE.MeshStandardMaterial({ map: getDiceTexture(faces.left, state, 0), emissive: emissiveColor, emissiveMap: getDiceEmissiveTexture(faces.left, state, 0), emissiveIntensity: intensity, roughness: 0.3, metalness: 0.7 }),
+        new THREE.MeshStandardMaterial({ map: getDiceTexture(faces.top, state, 1), emissive: emissiveColor, emissiveMap: getDiceEmissiveTexture(faces.top, state, 1), emissiveIntensity: intensity, roughness: 0.3, metalness: 0.7 }),
+        new THREE.MeshStandardMaterial({ map: getDiceTexture(faces.bottom, state, 1), emissive: emissiveColor, emissiveMap: getDiceEmissiveTexture(faces.bottom, state, 1), emissiveIntensity: intensity, roughness: 0.3, metalness: 0.7 }),
+        new THREE.MeshStandardMaterial({ map: getDiceTexture(faces.front, state, 0), emissive: emissiveColor, emissiveMap: getDiceEmissiveTexture(faces.front, state, 0), emissiveIntensity: intensity, roughness: 0.3, metalness: 0.7 }),
+        new THREE.MeshStandardMaterial({ map: getDiceTexture(faces.back, state, 0), emissive: emissiveColor, emissiveMap: getDiceEmissiveTexture(faces.back, state, 0), emissiveIntensity: intensity, roughness: 0.3, metalness: 0.7 })
     ];
     if (state === 'sinking' || state === 'sinking_one') mats.forEach(function(m) { m.transparent = true; m.opacity = 1.0; });
     materialsCache[key] = mats; return mats;
@@ -268,7 +300,8 @@ Die.prototype.roll = function(direction, onComplete) {
     AudioEngine.playRoll();
     var self = this, startTime = Date.now(), sWX = (sx - (GRID_COLS - 1) / 2) * GRID_SPACING, sWZ = (sy - (GRID_ROWS - 1) / 2) * GRID_SPACING;
     var eWX = (ex - (GRID_COLS - 1) / 2) * GRID_SPACING, eWZ = (ey - (GRID_ROWS - 1) / 2) * GRID_SPACING;
-    self.mesh.material = getDiceMaterials(self.faces, 'normal');
+    // Neon magenta while the die is being controlled so bloom + aura track it.
+    self.mesh.material = getDiceMaterials(self.faces, 'hover');
     function tick() {
         var elapsed = Date.now() - startTime, p = Math.min(elapsed / ROLL_DURATION, 1.0), ease = 1 - Math.pow(1 - p, 3);
         self.pivotGroup.position.set(sWX + ease * (eWX - sWX), Math.sin(p * Math.PI) * 0.18, sWZ + ease * (eWZ - sWZ));
@@ -276,7 +309,7 @@ Die.prototype.roll = function(direction, onComplete) {
         if (p < 1) requestAnimationFrame(tick);
         else {
             self.pivotGroup.rotation.set(0, 0, 0); self.pivotGroup.position.set(eWX, 0, eWZ);
-            self.state = 'normal'; self.height = 0; self._syncPivot(); if (onComplete) onComplete();
+            self.state = 'normal'; self.height = 0; self.mesh.material = getDiceMaterials(self.faces, 'normal'); self._syncPivot(); if (onComplete) onComplete();
         }
     }
     requestAnimationFrame(tick);
@@ -304,9 +337,10 @@ Die.prototype.slide = function(direction, onComplete) {
 Die.prototype._execSlide = function(direction, onComplete) {
     this.state = 'sliding'; var sx = this.gridX, sy = this.gridY, d = DIRECTIONS[direction], ex = sx + d.dx, ey = sy + d.dy;
     grid[sx][sy] = null; grid[ex][ey] = this; this.gridX = ex; this.gridY = ey; AudioEngine.playSlide();
+    this.mesh.material = getDiceMaterials(this.faces, 'hover');
     var self = this, startTime = Date.now(), sWX = (sx - (GRID_COLS - 1) / 2) * GRID_SPACING, sWZ = (sy - (GRID_ROWS - 1) / 2) * GRID_SPACING;
     var eWX = (ex - (GRID_COLS - 1) / 2) * GRID_SPACING, eWZ = (ey - (GRID_ROWS - 1) / 2) * GRID_SPACING;
-    function tick() { var p = Math.min((Date.now() - startTime) / SLIDE_DURATION, 1.0), ease = 1 - Math.pow(1 - p, 2); self.pivotGroup.position.set(sWX + ease * (eWX - sWX), 0, sWZ + ease * (eWZ - sWZ)); if (p < 1) requestAnimationFrame(tick); else { self.state = 'normal'; self.height = 0; self._syncPivot(); if (onComplete) onComplete(); } }
+    function tick() { var p = Math.min((Date.now() - startTime) / SLIDE_DURATION, 1.0), ease = 1 - Math.pow(1 - p, 2); self.pivotGroup.position.set(sWX + ease * (eWX - sWX), 0, sWZ + ease * (eWZ - sWZ)); if (p < 1) requestAnimationFrame(tick); else { self.state = 'normal'; self.height = 0; self.mesh.material = getDiceMaterials(self.faces, 'normal'); self._syncPivot(); if (onComplete) onComplete(); } }
     requestAnimationFrame(tick);
 };
 Die.prototype._execPush = function(direction, chain, onComplete) {
@@ -320,6 +354,7 @@ Die.prototype._execPush = function(direction, chain, onComplete) {
     // Update the grid atomically, then animate the whole chain in parallel.
     moves.forEach(function(m) { grid[m.sx][m.sy] = null; m.die.state = 'sliding'; });
     moves.forEach(function(m) { grid[m.ex][m.ey] = m.die; m.die.gridX = m.ex; m.die.gridY = m.ey; });
+    moves.forEach(function(m) { m.die.mesh.material = getDiceMaterials(m.die.faces, 'hover'); });
     AudioEngine.playSlide();
     var startTime = Date.now();
     var animMoves = moves.map(function(m) {
@@ -338,7 +373,7 @@ Die.prototype._execPush = function(direction, chain, onComplete) {
         });
         if (p < 1) requestAnimationFrame(tick);
         else {
-            animMoves.forEach(function(am) { am.die.state = 'normal'; am.die.height = 0; am.die._syncPivot(); });
+            animMoves.forEach(function(am) { am.die.state = 'normal'; am.die.height = 0; am.die.mesh.material = getDiceMaterials(am.die.faces, 'normal'); am.die._syncPivot(); });
             if (onComplete) onComplete();
         }
     }
@@ -354,13 +389,15 @@ function initEngine() {
     worldGroup.add(boardGroup); worldGroup.add(diceGroup); scene.add(worldGroup);
     renderer = new THREE.WebGLRenderer({ antialias: true }); renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.0;
     container.appendChild(renderer.domElement);
     setupOrthoCamera();
-    var al = new THREE.AmbientLight(0xffffff, 0.45); scene.add(al);
-    var dl = new THREE.DirectionalLight(0xffeedd, 0.85); dl.position.set(8, 14, 5); dl.castShadow = true;
+    initNebula(); initStardust(); initAura(); createComposer();
+    var al = new THREE.AmbientLight(0x8899ff, 0.5); scene.add(al);
+    var dl = new THREE.DirectionalLight(0xddeeff, 0.9); dl.position.set(8, 14, 5); dl.castShadow = true;
     dl.shadow.mapSize.width = 1024; dl.shadow.mapSize.height = 1024; dl.shadow.camera.near = 0.5; dl.shadow.camera.far = 50;
     var dd = 10; dl.shadow.camera.left = -dd; dl.shadow.camera.right = dd; dl.shadow.camera.top = dd; dl.shadow.camera.bottom = -dd; scene.add(dl);
-    var pl = new THREE.PointLight(0xff3366, 0.45, 25); pl.position.set(-4, 3, -4); scene.add(pl);
+    var pl = new THREE.PointLight(0xff2fd6, 0.6, 28); pl.position.set(-4, 3, -4); scene.add(pl);
     buildBoard(); window.addEventListener('resize', onWindowResize, false);
 }
 
@@ -380,21 +417,23 @@ function onWindowResize() {
     var halfH = boardHalf, halfV = boardHalf;
     if (aspect < 1) halfV = boardHalf / aspect;
     else halfH = boardHalf * aspect;
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(window.innerWidth, window.innerHeight);
+    resizeComposer(); resizeNebula();
     camera.left = -halfH; camera.right = halfH; camera.top = halfV; camera.bottom = -halfV; camera.updateProjectionMatrix();
 }
 
 
 function buildBoard() {
     boardGroup.clear(); var bw = GRID_COLS * GRID_SPACING, bh = GRID_ROWS * GRID_SPACING;
-    var bezelGeom = new THREE.BoxGeometry(bw + 0.4, 0.4, bh + 0.4), bezelMat = new THREE.MeshLambertMaterial({ color: 0x221a30 });
+    var bezelGeom = new THREE.BoxGeometry(bw + 0.4, 0.4, bh + 0.4), bezelMat = new THREE.MeshPhongMaterial({ color: 0x0c0916, specular: 0x334466, shininess: 60 });
     var bezel = new THREE.Mesh(bezelGeom, bezelMat); bezel.position.y = -0.2; bezel.receiveShadow = true; boardGroup.add(bezel);
     sinkingHighlights = Array(GRID_COLS).fill(null).map(function() { return Array(GRID_ROWS).fill(null); });
     var hlGeom = new THREE.PlaneGeometry(GRID_SPACING - 0.12, GRID_SPACING - 0.12);
     var hlMat = new THREE.MeshBasicMaterial({ color: 0xff3366, transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthTest: false });
     for (var x = 0; x < GRID_COLS; x++) for (var y = 0; y < GRID_ROWS; y++) {
         var tileGeom = new THREE.BoxGeometry(GRID_SPACING - 0.08, 0.1, GRID_SPACING - 0.08), isDark = (x + y) % 2 === 0;
-        var tileMat = new THREE.MeshLambertMaterial({ color: isDark ? 0x161026 : 0x1c1430, emissive: PALETTE.boardGrid, emissiveIntensity: 0.12 });
+        var tileMat = new THREE.MeshPhongMaterial({ color: isDark ? 0x0d0a16 : 0x120e1e, specular: 0x224466, shininess: 90, emissive: PALETTE.boardGrid, emissiveIntensity: 0.06 });
         var tile = new THREE.Mesh(tileGeom, tileMat); tile.position.set((x - (GRID_COLS - 1) / 2) * GRID_SPACING, -0.05, (y - (GRID_ROWS - 1) / 2) * GRID_SPACING);
         tile.receiveShadow = true; boardGroup.add(tile);
         var hl = new THREE.Mesh(hlGeom, hlMat);
@@ -403,9 +442,319 @@ function buildBoard() {
         hl.visible = false; boardGroup.add(hl);
         sinkingHighlights[x][y] = hl;
     }
+    ensureCircuitTrace(bw, bh);
 }
 
-function setBoardSize(sizeKey) { if (!BOARD_PRESETS[sizeKey]) return; var preset = BOARD_PRESETS[sizeKey]; boardSize = sizeKey; GRID_COLS = preset.cols; GRID_ROWS = preset.rows; totalCells = GRID_COLS * GRID_ROWS; grid = Array(GRID_COLS).fill(null).map(function() { return Array(GRID_ROWS).fill(null); }); buildBoard(); setupOrthoCamera(); }
+// ── Post-processing: full-res bloom + subtle vignette ──
+function createComposer() {
+    if (!renderer || !scene || !camera) return;
+    if (!THREE.EffectComposer || !THREE.RenderPass || !THREE.UnrealBloomPass || !THREE.ShaderPass) return;
+    composer = new THREE.EffectComposer(renderer);
+    renderPass = new THREE.RenderPass(scene, camera);
+    // Bloom at half resolution: UnrealBloomPass's internal bright/blur chain
+    // runs at the resolution we pass in. Half-res keeps the scene itself crisp
+    // (RenderPass is full-res) while making the glow soft AND cutting the
+    // SwiftShader/mobile cost roughly 4x. Visually this is closer to the
+    // "subtle glow" target than full-res bloom.
+    var bloomRes = new THREE.Vector2(
+        Math.max(64, Math.floor(window.innerWidth / 2)),
+        Math.max(64, Math.floor(window.innerHeight / 2))
+    );
+    bloomPass = new THREE.UnrealBloomPass(bloomRes, BLOOM_STRENGTH, BLOOM_RADIUS, BLOOM_THRESHOLD);
+    composer.addPass(renderPass);
+    composer.addPass(bloomPass);
+    if (THREE.VignetteShader) {
+        vignettePass = new THREE.ShaderPass(THREE.VignetteShader);
+        if (vignettePass.uniforms.offset) vignettePass.uniforms.offset.value = 1.05;
+        if (vignettePass.uniforms.darkness) vignettePass.uniforms.darkness.value = 0.55;
+        composer.addPass(vignettePass);
+    }
+    composer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    composer.setSize(window.innerWidth, window.innerHeight);
+}
+function resizeComposer() {
+    if (!composer) return;
+    composer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    composer.setSize(window.innerWidth, window.innerHeight);
+}
+
+// ── Dynamic swirling nebula background (deep purples / blues / cyans) ──
+function initNebula() {
+    if (nebulaMesh) return;
+    nebulaMat = new THREE.ShaderMaterial({
+        uniforms: { uTime: { value: 0 }, uAspect: { value: window.innerWidth / Math.max(1, window.innerHeight) } },
+        vertexShader: [
+            'varying vec2 vUv;',
+            'void main() {',
+            '    vUv = uv;',
+            '    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);',
+            '}'
+        ].join('\n'),
+        fragmentShader: [
+            'uniform float uTime;',
+            'uniform float uAspect;',
+            'varying vec2 vUv;',
+            'float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }',
+            'float noise(vec2 p) {',
+            '    vec2 i = floor(p); vec2 f = fract(p);',
+            '    f = f * f * (3.0 - 2.0 * f);',
+            '    float a = hash(i); float b = hash(i + vec2(1.0, 0.0));',
+            '    float c = hash(i + vec2(0.0, 1.0)); float d = hash(i + vec2(1.0, 1.0));',
+            '    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);',
+            '}',
+            'float fbm(vec2 p) {',
+            '    float v = 0.0; float amp = 0.5;',
+            '    for (int i = 0; i < 2; i++) { v += amp * noise(p); p *= 2.05; amp *= 0.5; }',
+            '    return v;',
+            '}',
+            'void main() {',
+            '    vec2 p = vec2(vUv.x * uAspect, vUv.y) * 2.0 - vec2(uAspect, 1.0);',
+            '    float t = uTime * 0.035;',
+            '    float n1 = fbm(p * 1.5 + vec2(t, -t * 0.7));',
+            '    float n2 = fbm(p * 2.6 - vec2(t * 0.8, t * 0.5) + n1 * 1.2);',
+            '    float n3 = fbm(p * 4.1 + vec2(t * 0.5, -t) + n2 * 1.5);',
+            '    float swirl = n1 * 0.55 + n2 * 0.3 + n3 * 0.15;',
+            '    vec3 c1 = vec3(0.09, 0.045, 0.20);',
+            '    vec3 c2 = vec3(0.17, 0.09, 0.40);',
+            '    vec3 c3 = vec3(0.08, 0.32, 0.52);',
+            '    vec3 col = mix(c1, c2, smoothstep(0.12, 0.7, swirl));',
+            '    col = mix(col, c3, smoothstep(0.55, 0.95, swirl));',
+            '    float star = step(0.994, hash(floor(p * 16.0)));',
+            '    vec2 starCell = floor(p * 16.0);',
+            '    star *= 0.45 + 0.55 * sin(uTime * 1.5 + starCell.x * 7.0);',
+            '    col += vec3(0.7, 0.9, 1.0) * star * 0.3;',
+            '    gl_FragColor = vec4(col, 1.0);',
+            '}'
+        ].join('\n'),
+        depthWrite: false, depthTest: false, fog: false
+    });
+    var geom = new THREE.PlaneGeometry(1, 1);
+    nebulaMesh = new THREE.Mesh(geom, nebulaMat);
+    nebulaMesh.position.set(0, 0, -16);
+    nebulaMesh.renderOrder = -10;
+    nebulaMesh.frustumCulled = false;
+    scene.add(nebulaMesh);
+    // Low-res render target: the nebula shader is animated every frame, so
+    // render it at reduced resolution (1/4 linear = 1/16 pixels) and blit it
+    // up. fbm noise on a dark background is indistinguishable at low res and
+    // this keeps SwiftShader/mobile main threads from being saturated (which
+    // otherwise starves the networkIdle lifecycle event in headless tests).
+    nebulaScene = new THREE.Scene();
+    nebulaCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
+    nebulaCam.position.z = 1;
+    nebulaScene.add(nebulaMesh);
+    var rtW = Math.max(64, Math.floor(window.innerWidth / 4));
+    var rtH = Math.max(64, Math.floor(window.innerHeight / 4));
+    nebulaRT = new THREE.WebGLRenderTarget(rtW, rtH, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat });
+    nebulaScreen = new THREE.Mesh(
+        new THREE.PlaneGeometry(1, 1),
+        new THREE.MeshBasicMaterial({ map: nebulaRT.texture, depthWrite: false, depthTest: false, fog: false })
+    );
+    nebulaScreen.position.set(0, 0, -15.8);
+    nebulaScreen.renderOrder = -10;
+    nebulaScreen.frustumCulled = false;
+    scene.add(nebulaScreen);
+    resizeNebula();
+}
+function resizeNebula() {
+    if (!nebulaMesh) return;
+    var boardHalf = Math.max(GRID_COLS, GRID_ROWS) * GRID_SPACING / 2 + GRID_SPACING * 0.7;
+    var aspect = window.innerWidth / window.innerHeight;
+    var halfH = boardHalf, halfV = boardHalf;
+    if (aspect < 1) halfV = boardHalf / aspect;
+    else halfH = boardHalf * aspect;
+    nebulaMesh.scale.set(halfH * 2.4, halfV * 2.4, 1);
+    nebulaMesh.lookAt(camera.position);
+    if (nebulaMat && nebulaMat.uniforms) nebulaMat.uniforms.uAspect.value = window.innerWidth / Math.max(1, window.innerHeight);
+    if (nebulaRT) {
+        var rtW = Math.max(64, Math.floor(window.innerWidth / 4));
+        var rtH = Math.max(64, Math.floor(window.innerHeight / 4));
+        nebulaRT.setSize(rtW, rtH);
+    }
+    if (nebulaScreen) {
+        nebulaScreen.scale.set(halfH * 2.4, halfV * 2.4, 1);
+        nebulaScreen.lookAt(camera.position);
+    }
+}
+function updateNebula() {
+    if (nebulaMat && nebulaMat.uniforms) nebulaMat.uniforms.uTime.value = performance.now() * 0.001;
+    // Render the animated nebula into the low-res RT, then blit via nebulaScreen
+    if (nebulaRT && nebulaScene && nebulaCam && renderer) {
+        var prevRT = renderer.getRenderTarget();
+        renderer.setRenderTarget(nebulaRT);
+        renderer.render(nebulaScene, nebulaCam);
+        renderer.setRenderTarget(prevRT);
+    }
+}
+
+// ── Stardust particle field drifting behind the board ──
+function initStardust() {
+    if (stardustPoints) return;
+    var positions = new Float32Array(STARDUST_COUNT * 3);
+    var colors = new Float32Array(STARDUST_COUNT * 3);
+    var seeds = [];
+    for (var i = 0; i < STARDUST_COUNT; i++) {
+        positions[i * 3] = (Math.random() - 0.5) * 26;
+        positions[i * 3 + 1] = (Math.random() - 0.5) * 18;
+        positions[i * 3 + 2] = -1.5 - Math.random() * 4.5;
+        var c = new THREE.Color().setHSL(0.55 + Math.random() * 0.22, 0.75, 0.5 + Math.random() * 0.4);
+        colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+        seeds.push({ phase: Math.random() * Math.PI * 2, speed: 0.3 + Math.random() * 0.9, drift: 0.002 + Math.random() * 0.006 });
+    }
+    var geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    var mat = new THREE.PointsMaterial({
+        size: 0.4, vertexColors: true, transparent: true, opacity: 0.85,
+        blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, sizeAttenuation: true
+    });
+    stardustPoints = new THREE.Points(geom, mat);
+    stardustPoints.renderOrder = -9;
+    stardustPoints.userData.seeds = seeds;
+    scene.add(stardustPoints);
+}
+function updateStardust() {
+    if (!stardustPoints) return;
+    stardustPhase += 0.02;
+    var pos = stardustPoints.geometry.attributes.position;
+    var seeds = stardustPoints.userData.seeds;
+    for (var i = 0; i < STARDUST_COUNT && seeds && i < seeds.length; i++) {
+        var s = seeds[i];
+        pos.array[i * 3] += Math.sin(stardustPhase * 0.7 + s.phase) * 0.002 + s.drift;
+        pos.array[i * 3 + 1] += Math.cos(stardustPhase * 0.5 + s.phase) * 0.002 + Math.sin(stardustPhase * 0.3 + s.phase * 2.0) * 0.001;
+        if (pos.array[i * 3] > 13) pos.array[i * 3] = -13;
+        if (pos.array[i * 3] < -13) pos.array[i * 3] = 13;
+        if (pos.array[i * 3 + 1] > 9) pos.array[i * 3 + 1] = -9;
+        if (pos.array[i * 3 + 1] < -9) pos.array[i * 3 + 1] = 9;
+    }
+    pos.needsUpdate = true;
+}
+
+// ── Pulsing emissive circuit-trace layer beneath the glass board ──
+function ensureCircuitTrace(bw, bh) {
+    if (!circuitTraceMesh) {
+        var cv = document.createElement('canvas'); cv.width = 256; cv.height = 256; var ctx = cv.getContext('2d');
+        ctx.clearRect(0, 0, 256, 256);
+        ctx.strokeStyle = 'rgba(140, 255, 240, 1)'; ctx.lineWidth = 2;
+        for (var i = 0; i < 90; i++) {
+            ctx.beginPath();
+            var x = Math.random() * 256, y = Math.random() * 256;
+            ctx.moveTo(x, y);
+            var hdir = Math.random() < 0.5;
+            for (var sgm = 0; sgm < 4; sgm++) {
+                if (hdir) x += (Math.random() < 0.5 ? -1 : 1) * (22 + Math.random() * 55);
+                else y += (Math.random() < 0.5 ? -1 : 1) * (22 + Math.random() * 55);
+                ctx.lineTo(Math.max(2, Math.min(254, x)), Math.max(2, Math.min(254, y)));
+                hdir = !hdir;
+            }
+            ctx.stroke();
+        }
+        ctx.fillStyle = 'rgba(140, 255, 240, 1)';
+        for (var j = 0; j < 40; j++) { ctx.beginPath(); ctx.arc(Math.random() * 256, Math.random() * 256, 2 + Math.random() * 2, 0, Math.PI * 2); ctx.fill(); }
+        var tex = new THREE.CanvasTexture(cv);
+        tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+        circuitTraceMat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.14, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, side: THREE.DoubleSide });
+        circuitTraceMesh = new THREE.Mesh(new THREE.PlaneGeometry(bw + 0.2, bh + 0.2), circuitTraceMat);
+        circuitTraceMesh.rotation.x = -Math.PI / 2;
+        circuitTraceMesh.position.y = 0.004;
+        circuitTraceMesh.renderOrder = 2;
+    } else {
+        if (circuitTraceMesh.geometry) circuitTraceMesh.geometry.dispose();
+        circuitTraceMesh.geometry = new THREE.PlaneGeometry(bw + 0.2, bh + 0.2);
+    }
+    boardGroup.add(circuitTraceMesh);
+}
+function updateCircuitTrace() {
+    if (!circuitTraceMat) return;
+    circuitPulse = (circuitPulse + 0.02) % (Math.PI * 2);
+    circuitTraceMat.opacity = 0.1 + 0.08 * (0.5 + 0.5 * Math.sin(circuitPulse));
+    if (circuitTraceMat.map) {
+        circuitTraceMat.map.offset.y = (circuitTraceMat.map.offset.y + 0.001) % 1;
+        circuitTraceMat.map.offset.x = (circuitTraceMat.map.offset.x + 0.0004) % 1;
+    }
+}
+
+// ── Neon magenta energy aura around active / controlled dice ──
+function initAura() {
+    if (auraPoints) return;
+    var positions = new Float32Array(AURA_MAX_PARTICLES * 3);
+    var colors = new Float32Array(AURA_MAX_PARTICLES * 3);
+    var geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    var mat = new THREE.PointsMaterial({
+        size: 0.45, vertexColors: true, transparent: true, opacity: 1.0,
+        blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, sizeAttenuation: true
+    });
+    auraPoints = new THREE.Points(geom, mat);
+    auraPoints.renderOrder = 6;
+    auraPoints.visible = false;
+    var parts = [];
+    for (var i = 0; i < AURA_MAX_PARTICLES; i++) parts.push({ life: 0, maxLife: 1, vx: 0, vy: 0, vz: 0 });
+    auraPoints.userData.particles = parts;
+    scene.add(auraPoints);
+}
+function emitAura(pos) {
+    if (!auraPoints) initAura();
+    var parts = auraPoints.userData.particles;
+    var positions = auraPoints.geometry.attributes.position;
+    var colors = auraPoints.geometry.attributes.color;
+    var spawned = 0;
+    for (var i = 0; i < AURA_MAX_PARTICLES && spawned < 3; i++) {
+        var p = parts[i];
+        if (p.life > 0) continue;
+        p.life = 1; p.maxLife = 26 + Math.floor(Math.random() * 16);
+        var ang = Math.random() * Math.PI * 2;
+        var sp = 0.05 + Math.random() * 0.09;
+        p.vx = Math.cos(ang) * sp; p.vz = Math.sin(ang) * sp; p.vy = 0.02 + Math.random() * 0.06;
+        positions.array[i * 3] = pos.x + (Math.random() - 0.5) * 0.16;
+        positions.array[i * 3 + 1] = pos.y + (Math.random() - 0.5) * 0.16;
+        positions.array[i * 3 + 2] = pos.z + (Math.random() - 0.5) * 0.16;
+        colors.array[i * 3] = 1.0; colors.array[i * 3 + 1] = 0.18; colors.array[i * 3 + 2] = 0.84;
+        spawned++;
+    }
+}
+function updateAura() {
+    if (!auraPoints) return;
+    var parts = auraPoints.userData.particles;
+    var positions = auraPoints.geometry.attributes.position;
+    var colors = auraPoints.geometry.attributes.color;
+    var anyAlive = false;
+    for (var i = 0; i < AURA_MAX_PARTICLES; i++) {
+        var p = parts[i];
+        if (p.life <= 0) {
+            colors.array[i * 3] = 0; colors.array[i * 3 + 1] = 0; colors.array[i * 3 + 2] = 0;
+            continue;
+        }
+        p.life -= 1 / p.maxLife;
+        positions.array[i * 3] += p.vx;
+        positions.array[i * 3 + 1] += p.vy;
+        positions.array[i * 3 + 2] += p.vz;
+        p.vy -= 0.0004;
+        var f = Math.max(0, p.life);
+        colors.array[i * 3] = f; colors.array[i * 3 + 1] = 0.18 * f; colors.array[i * 3 + 2] = 0.84 * f;
+        if (p.life > 0) anyAlive = true;
+    }
+    positions.needsUpdate = true; colors.needsUpdate = true;
+    auraPoints.visible = anyAlive;
+}
+function updateAuraEmitter() {
+    if (gameState !== 'playing') return;
+    if (!auraPoints) initAura();
+    var emitted = 0;
+    for (var x = 0; x < GRID_COLS && emitted < 2; x++) {
+        for (var y = 0; y < GRID_ROWS && emitted < 2; y++) {
+            var d = grid[x] && grid[x][y];
+            if (d && (d.state === 'rolling' || d.state === 'sliding') && d.pivotGroup) {
+                emitAura(d.pivotGroup.position);
+                emitted++;
+            }
+        }
+    }
+    if (emitted < 2 && inputState.curDie && inputState.curDie.pivotGroup) emitAura(inputState.curDie.pivotGroup.position);
+}
+
+function setBoardSize(sizeKey) { if (!BOARD_PRESETS[sizeKey]) return; var preset = BOARD_PRESETS[sizeKey]; boardSize = sizeKey; GRID_COLS = preset.cols; GRID_ROWS = preset.rows; totalCells = GRID_COLS * GRID_ROWS; grid = Array(GRID_COLS).fill(null).map(function() { return Array(GRID_ROWS).fill(null); }); buildBoard(); setupOrthoCamera(); resizeNebula(); }
 
 function battleAwardScore(points) {
     if (gameMode !== 'battle') { score += points; updateScoreDisplay(); return; }
@@ -462,9 +811,9 @@ var inputState = { activePtrId: null, sX: 0, sY: 0, sT: 0, curDie: null, holdTmr
 function setupPointerEvents() { var cv = renderer.domElement; cv.addEventListener('pointerdown', onPointerDown); cv.addEventListener('pointermove', onPointerMove); cv.addEventListener('pointerup', onPointerUp); cv.addEventListener('pointercancel', onPointerUp); cv.addEventListener('contextmenu', function(e) { e.preventDefault(); }); }
 function onPointerDown(e) { if (gameState !== 'playing' || animationLock || inputState.activePtrId !== null) return; if (gameMode === 'battle' && Date.now() < battlePlayerFrozenUntil) return; e.preventDefault(); inputState.activePtrId = e.pointerId; inputState.sX = e.clientX; inputState.sY = e.clientY; inputState.sT = Date.now(); inputState.isHolding = false; inputState.hasMoved = false; inputState.curDie = null; inputState.lastGX = -1; inputState.lastGY = -1; var die = raycastDie(e.clientX, e.clientY); if (die && die.state === 'normal' && die.cellType === CELL_TYPE.ACTIVE) { inputState.curDie = die; die.setHover(true); inputState.lastGX = die.gridX; inputState.lastGY = die.gridY; } if (inputState.holdTmr) clearTimeout(inputState.holdTmr); inputState.holdTmr = setTimeout(function() { if (inputState.activePtrId !== null && inputState.curDie && !inputState.hasMoved) { inputState.isHolding = true; AudioEngine.playHaptic(); showGestureHint('Hold & Drag'); } }, HOLD_THRESHOLD); }
 function onPointerMove(e) { if (gameState !== 'playing' || inputState.activePtrId !== e.pointerId) return; if (gameMode === 'battle' && Date.now() < battlePlayerFrozenUntil) return; var dx = e.clientX - inputState.sX, dy = e.clientY - inputState.sY, dist = Math.sqrt(dx * dx + dy * dy); if (dist < SWIPE_THRESHOLD && !inputState.isHolding) return; if (inputState.isHolding && inputState.curDie) { e.preventDefault(); inputState.hasMoved = true; var cell = getGridCellFromPointer(e.clientX, e.clientY); if (cell && (cell.gx !== inputState.lastGX || cell.gy !== inputState.lastGY)) { var gdx = cell.gx - inputState.lastGX, gdy = cell.gy - inputState.lastGY; var dir = null; if (gdx === 1 && gdy === 0) dir = 'east'; else if (gdx === -1 && gdy === 0) dir = 'west'; else if (gdx === 0 && gdy === 1) dir = 'south'; else if (gdx === 0 && gdy === -1) dir = 'north'; if (dir) { triggerSlide(inputState.curDie, dir); inputState.lastGX = cell.gx; inputState.lastGY = cell.gy; } } } else if (dist >= SWIPE_THRESHOLD) { if (inputState.holdTmr) { clearTimeout(inputState.holdTmr); inputState.holdTmr = null; } inputState.hasMoved = true; } }
-function onPointerUp(e) { if (inputState.activePtrId !== e.pointerId) return; if (inputState.holdTmr) { clearTimeout(inputState.holdTmr); inputState.holdTmr = null; } var dx = e.clientX - inputState.sX, dy = e.clientY - inputState.sY, dist = Math.sqrt(dx * dx + dy * dy), elapsed = Date.now() - inputState.sT; if (inputState.curDie) inputState.curDie.setHover(false); if (!inputState.isHolding && inputState.hasMoved && dist >= SWIPE_THRESHOLD && elapsed < HOLD_THRESHOLD) { if (gameMode !== 'battle' || Date.now() >= battlePlayerFrozenUntil) { var dir = getSwipeDirection(dx, dy); if (inputState.curDie && inputState.curDie.state === 'normal') triggerRoll(inputState.curDie, dir); } } hideGestureHint(); inputState.activePtrId = null; inputState.curDie = null; inputState.isHolding = false; inputState.hasMoved = false; }
+function onPointerUp(e) { if (inputState.activePtrId !== e.pointerId) return; if (inputState.holdTmr) { clearTimeout(inputState.holdTmr); inputState.holdTmr = null; } var dx = e.clientX - inputState.sX, dy = e.clientY - inputState.sY, dist = Math.sqrt(dx * dx + dy * dy), elapsed = Date.now() - inputState.sT; if (inputState.curDie) inputState.curDie.setHover(false); if (!inputState.isHolding && inputState.hasMoved && dist >= SWIPE_THRESHOLD && elapsed < HOLD_THRESHOLD) { if (gameMode !== 'battle' || Date.now() >= battlePlayerFrozenUntil) { var dir = getSwipeDirection(inputState.sX, inputState.sY, e.clientX, e.clientY); if (inputState.curDie && inputState.curDie.state === 'normal') triggerRoll(inputState.curDie, dir); } } hideGestureHint(); inputState.activePtrId = null; inputState.curDie = null; inputState.isHolding = false; inputState.hasMoved = false; }
 function raycastDie(cx, cy) { var rect = renderer.domElement.getBoundingClientRect(), mx = ((cx - rect.left) / rect.width) * 2 - 1, my = -((cy - rect.top) / rect.height) * 2 + 1; var rc = new THREE.Raycaster(); rc.setFromCamera(new THREE.Vector2(mx, my), camera); var hits = rc.intersectObjects(diceGroup.children, true); if (hits.length > 0) { var obj = hits[0].object; while (obj && !obj.userData.die) obj = obj.parent; if (obj && obj.userData.die) return obj.userData.die; } return null; }
-function getSwipeDirection(dx, dy) { var ang = Math.atan2(dy, dx), deg = ang * (180 / Math.PI); if (deg < 0) deg += 360; if (deg >= 0 && deg < 90) return "east"; if (deg >= 90 && deg < 180) return "south"; if (deg >= 180 && deg < 270) return "west"; return "north"; }
+function getSwipeDirection(sx, sy, ex, ey) { function projectToGridPlane(cx, cy) { var rect = renderer.domElement.getBoundingClientRect(), mx = ((cx - rect.left) / rect.width) * 2 - 1, my = -((cy - rect.top) / rect.height) * 2 + 1; var rc = new THREE.Raycaster(); rc.setFromCamera(new THREE.Vector2(mx, my), camera); var plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); var pt = new THREE.Vector3(); if (rc.ray.intersectPlane(plane, pt)) return pt; return null; } var p1 = projectToGridPlane(sx, sy), p2 = projectToGridPlane(ex, ey); if (p1 && p2) { var gdx = p2.x - p1.x, gdz = p2.z - p1.z; if (gdx !== 0 && Math.abs(gdx) >= Math.abs(gdz)) return gdx > 0 ? 'east' : 'west'; if (gdz !== 0) return gdz > 0 ? 'south' : 'north'; } var dx = ex - sx, dy = ey - sy, ang = Math.atan2(dy, dx), deg = ang * (180 / Math.PI); if (deg < 0) deg += 360; if (deg >= 0 && deg < 90) return "east"; if (deg >= 90 && deg < 180) return "south"; if (deg >= 180 && deg < 270) return "west"; return "north"; }
 function getGridCellFromPointer(cx, cy) { var rect = renderer.domElement.getBoundingClientRect(), mx = ((cx - rect.left) / rect.width) * 2 - 1, my = -((cy - rect.top) / rect.height) * 2 + 1; var rc = new THREE.Raycaster(); rc.setFromCamera(new THREE.Vector2(mx, my), camera); var plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); var pt = new THREE.Vector3(); if (rc.ray.intersectPlane(plane, pt)) { var gx = Math.round(pt.x / GRID_SPACING + (GRID_COLS - 1) / 2), gy = Math.round(pt.z / GRID_SPACING + (GRID_ROWS - 1) / 2); if (gx >= 0 && gx < GRID_COLS && gy >= 0 && gy < GRID_ROWS) return { gx: gx, gy: gy }; } return null; }
 function triggerRoll(die, dir) { animationLock = true; var turn = gameMode === 'battle' ? 'player' : null; battleCurrentTurn = turn; die.roll(dir, function() { battleCurrentTurn = turn; evaluateRollChain(die); checkAllMatches(); animationLock = false; if (gameMode === 'battle') battleCurrentTurn = null; if (gameMode === 'puzzle') decrementPuzzleMove(); }); }
 function triggerSlide(die, dir) { animationLock = true; var turn = gameMode === 'battle' ? 'player' : null; battleCurrentTurn = turn; die.slide(dir, function() { battleCurrentTurn = turn; evaluateRollChain(die); checkAllMatches(); animationLock = false; if (gameMode === 'battle') battleCurrentTurn = null; if (gameMode === 'puzzle') decrementPuzzleMove(); }); }
@@ -473,7 +822,7 @@ function findRollableDie() { var cx = Math.floor(GRID_COLS / 2), cy = Math.floor
 function showGestureHint(txt) { var h = document.getElementById('gesture-hint'); document.getElementById('hint-text').innerText = txt; h.classList.remove('gesture-hide'); }
 function hideGestureHint() { document.getElementById('gesture-hint').classList.add('gesture-hide'); }
 
-function startGame(mode) { AudioEngine.stopMenuMusic(); mode = mode || 'zen'; AudioEngine.init(); gameState = 'playing'; gameMode = mode; score = 0; comboCount = 0; animationLock = false; hideAiMoveMarker(); updateScoreDisplay(); hideComboBanner(); hideGestureHint(); document.getElementById('menu-screen').classList.remove('active'); document.getElementById('pause-screen').classList.remove('active'); document.getElementById('gameover-screen').classList.remove('active'); document.getElementById('hud-screen').classList.add('active'); document.getElementById('puzzle-hud').style.display = (mode === 'puzzle') ? 'flex' : 'none'; document.getElementById('battle-hud').style.display = (mode === 'battle') ? 'flex' : 'none'; document.getElementById('hud-screen').classList.toggle('hide-highscore', mode === 'battle'); document.getElementById('battle-timer-box').style.display = (mode === 'battle') ? 'block' : 'none'; if (mode === 'puzzle') setupPuzzleMode(); else if (mode === 'battle') setupBattleMode();    else { populateInitialBoard(); startSpawning(); initZenEffects(); } if (musicEnabled) { AudioEngine.stopBGM(); AudioEngine.startBGM(); } updateFullnessBar(countActiveDice() / totalCells); }
+function startGame(mode) { AudioEngine.stopMenuMusic(); mode = mode || 'zen'; AudioEngine.init(); gameState = 'playing'; gameMode = mode; score = 0; comboCount = 0; animationLock = false; hideAiMoveMarker(); updateScoreDisplay(); hideComboBanner(); hideGestureHint(); initStardust(); initAura(); document.getElementById('menu-screen').classList.remove('active'); document.getElementById('pause-screen').classList.remove('active'); document.getElementById('gameover-screen').classList.remove('active'); document.getElementById('hud-screen').classList.add('active'); document.getElementById('puzzle-hud').style.display = (mode === 'puzzle') ? 'flex' : 'none'; document.getElementById('battle-hud').style.display = (mode === 'battle') ? 'flex' : 'none'; document.getElementById('hud-screen').classList.toggle('hide-highscore', mode === 'battle'); document.getElementById('battle-timer-box').style.display = (mode === 'battle') ? 'block' : 'none'; if (mode === 'puzzle') setupPuzzleMode(); else if (mode === 'battle') setupBattleMode();    else { populateInitialBoard(); startSpawning(); initZenEffects(); } if (musicEnabled) { AudioEngine.stopBGM(); AudioEngine.startBGM(); } updateFullnessBar(countActiveDice() / totalCells); }
 function startSpawning() { stopSpawning(); spawnTimerId = setTimeout(spawnRandomDie, DIFFICULTY_SETTINGS[selectedDifficulty].spawnInterval); }
 function pauseGame() { if (gameState !== 'playing') return; gameState = 'paused'; stopSpawning(); AudioEngine.stopBGM(); document.getElementById('hud-screen').classList.remove('active'); document.getElementById('pause-screen').classList.add('active'); }
 function resumeGame() { if (gameState !== 'paused') return; gameState = 'playing'; document.getElementById('pause-screen').classList.remove('active'); document.getElementById('hud-screen').classList.add('active'); if (gameMode !== 'puzzle') startSpawning(); if (musicEnabled) AudioEngine.startBGM(); }
@@ -723,6 +1072,18 @@ function clearZenEffects() {
         zenAmbientParticles.geometry.dispose();
         zenAmbientParticles.material.dispose();
         zenAmbientParticles = null;
+    }
+    if (stardustPoints) {
+        scene.remove(stardustPoints);
+        stardustPoints.geometry.dispose();
+        stardustPoints.material.dispose();
+        stardustPoints = null;
+    }
+    if (auraPoints) {
+        scene.remove(auraPoints);
+        auraPoints.geometry.dispose();
+        auraPoints.material.dispose();
+        auraPoints = null;
     }
     zenFireworkBursts.forEach(function(m) {
         worldGroup.remove(m);
@@ -996,7 +1357,7 @@ function hideComboBanner() { document.getElementById('combo-display').classList.
 function setupControlListeners() { window.addEventListener('keydown', handleKeyboard); setupPointerEvents(); document.getElementById('zen-btn').addEventListener('click', function() { startGame('zen'); }); document.getElementById('puzzle-btn').addEventListener('click', function() { startGame('puzzle'); }); document.getElementById('battle-btn').addEventListener('click', function() { startGame('battle'); }); document.getElementById('how-to-btn').addEventListener('click', function() { document.getElementById('how-to-modal').classList.add('active'); }); document.getElementById('close-how-to').addEventListener('click', function() { document.getElementById('how-to-modal').classList.remove('active'); }); document.getElementById('settings-btn').addEventListener('click', function() { document.getElementById('board-size').value = boardSize; document.getElementById('sound-toggle').checked = soundEnabled; document.getElementById('music-toggle').checked = musicEnabled; document.getElementById('difficulty').value = selectedDifficulty; document.getElementById('ai-difficulty').value = aiDifficulty; document.getElementById('battle-duration').value = battleDuration; document.getElementById('settings-modal').classList.add('active'); }); document.getElementById('close-settings').addEventListener('click', function() { soundEnabled = document.getElementById('sound-toggle').checked; var mc = document.getElementById('music-toggle').checked; if (mc !== musicEnabled) { musicEnabled = mc; if (gameState === 'playing') { if (musicEnabled) AudioEngine.startBGM(); else AudioEngine.stopBGM(); } else if (gameState === 'menu') { if (musicEnabled) AudioEngine.startMenuMusic(); else AudioEngine.stopMenuMusic(); } } selectedDifficulty = document.getElementById('difficulty').value; aiDifficulty = document.getElementById('ai-difficulty').value; battleDuration = parseInt(document.getElementById('battle-duration').value); var newBoardSize = document.getElementById('board-size').value; if (newBoardSize !== boardSize) { stopSpawning(); clearAllDice(); setBoardSize(newBoardSize); if (gameState === 'playing') startGame(gameMode); else quitToMenu(); } document.getElementById('settings-modal').classList.remove('active'); }); document.getElementById('pause-btn').addEventListener('click', pauseGame); document.getElementById('resume-btn').addEventListener('click', resumeGame); document.getElementById('restart-pause-btn').addEventListener('click', function() { startGame(gameMode); }); document.getElementById('quit-btn').addEventListener('click', quitToMenu); document.getElementById('retry-btn').addEventListener('click', function() { startGame(gameMode); }); document.getElementById('menu-quit-btn').addEventListener('click', quitToMenu); }
 
 var _frameCount = 0, _lastFpsTime = performance.now(), _currentFPS = 60;
-function gameLoop() { requestAnimationFrame(gameLoop); _frameCount++; var now = performance.now(); if (now - _lastFpsTime >= 1000) { _currentFPS = Math.round(_frameCount * 1000 / (now - _lastFpsTime)); _frameCount = 0; _lastFpsTime = now; } if (renderer && scene && camera) renderer.render(scene, camera); if (gameState === 'playing') { updateSinkingDice(); updateSinkingHighlights(); updateZenEffects(); updateAiMoveMarker(); var activeCount = countActiveDice(); updateFullnessBar(activeCount / totalCells); if (gameMode !== 'battle' && activeCount >= totalCells) triggerGameOver(); if (gameMode === 'battle') updateFreezeDisplay(); } }
+function gameLoop() { requestAnimationFrame(gameLoop); _frameCount++; var now = performance.now(); if (now - _lastFpsTime >= 1000) { _currentFPS = Math.round(_frameCount * 1000 / (now - _lastFpsTime)); _frameCount = 0; _lastFpsTime = now; } updateNebula(); updateStardust(); updateCircuitTrace(); updateAuraEmitter(); updateAura(); if (renderer && scene && camera) { if (composer) composer.render(); else renderer.render(scene, camera); } if (gameState === 'playing') { updateSinkingDice(); updateSinkingHighlights(); updateZenEffects(); updateAiMoveMarker(); var activeCount = countActiveDice(); updateFullnessBar(activeCount / totalCells); if (gameMode !== 'battle' && activeCount >= totalCells) triggerGameOver(); if (gameMode === 'battle') updateFreezeDisplay(); } }
 function updateSinkingHighlights() { for (var x = 0; x < GRID_COLS; x++) for (var y = 0; y < GRID_ROWS; y++) { var hl = sinkingHighlights[x] && sinkingHighlights[x][y]; if (hl) { var die = grid[x] && grid[x][y]; hl.visible = !!(die && die.state === 'sinking'); } } }
 
 window.onload = function() { document.getElementById('menu-highscore').innerText = Number(highScore).toLocaleString(); initEngine(); setupControlListeners(); gameLoop(); AudioEngine.startMenuMusic(); };
