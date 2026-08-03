@@ -142,6 +142,12 @@ async function runPlaytest() {
   // Start Zen mode
   await page.click('#zen-btn');
 
+  // Stop the spawner IMMEDIATELY (before any spawn can fire) so the settled
+  // board for the regression screenshot is deterministic — initial dice only.
+  // A spawn landing mid-capture shifts pixels run-to-run (amplified by
+  // audio-startup timing variance); golden + test must capture the same board.
+  await page.evaluate(() => { try { if (typeof window.stopSpawning === 'function') window.stopSpawning(); } catch (e) {} });
+
   // Wait for the game to initialize and all dice to finish rising so the
   // board is visually settled (matching the golden baseline state).
   await page.waitForFunction(() =>
@@ -161,8 +167,29 @@ async function runPlaytest() {
   await sleep(400); // let the final animation frame settle
 
   // Regression screenshot: deterministic, pre-move, firework-free (seeded mode)
+  //
+  // Hide the TIME-VARYING background layers so the capture frame is fully
+  // deterministic: nebula stars twinkle, stardust drifts per-frame, and the
+  // circuit pulse follows uTime — all phase-dependent, so they differ
+  // run-to-run (a bright star appearing in one run alone trips pixelmatch).
+  // Golden and test capture the same static board + dice scene this way.
+  // Visibility is restored right after the screenshot (below).
+  await page.evaluate(() => {
+    const setVis = (v, vis) => { try { if (window[v]) window[v].visible = vis; } catch (e) {} };
+    setVis('nebulaScreen', false);
+    setVis('stardustPoints', false);
+    setVis('circuitTraceMesh', false);
+    setVis('zenAmbientParticles', false);
+  });
   const regressionScreenshot = `test_output/${TEST_ID}_regression.png`;
   await page.screenshot({ path: regressionScreenshot, fullPage: false });
+  await page.evaluate(() => {
+    const setVis = (v, vis) => { try { if (window[v]) window[v].visible = vis; } catch (e) {} };
+    setVis('nebulaScreen', true);
+    setVis('stardustPoints', true);
+    setVis('circuitTraceMesh', true);
+    setVis('zenAmbientParticles', true);
+  });
 
   // ── Baseline mode: save the settled screenshot as the golden master ──
   if (BASELINE) {
@@ -174,6 +201,10 @@ async function runPlaytest() {
   // ── Main play loop: 30+ seconds of simulated play ──
   const startTime = Date.now();
   let step = 0;
+
+  // Resume spawning for the play loop (it was stopped for the deterministic
+  // capture above).
+  await page.evaluate(() => { try { if (typeof window.startSpawning === 'function') window.startSpawning(); } catch (e) {} });
 
   while (Date.now() - startTime < ARGS.duration) {
     step++;

@@ -59,7 +59,7 @@ var grid = [], score = 0, comboCount = 0;
 var sinkingHighlights = [];
 var highScore = localStorage.getItem('devildice_zen_hs') ? parseInt(localStorage.getItem('devildice_zen_hs')) : 0;
 var gameState = 'menu', gameMode = 'zen', selectedDifficulty = 'medium', aiDifficulty = 'medium';
-var soundEnabled = true, musicEnabled = false, spawnTimerId = null, activeSinkingGroups = [];
+var soundEnabled = true, musicEnabled = true, spawnTimerId = null, activeSinkingGroups = [];
 var totalCells = GRID_COLS * GRID_ROWS, boardSize = '7x7', animationLock = false;
 var puzzleMovesRemaining = 0, puzzleCleared = false, puzzleStage = 1, puzzleMaxStages = 10;
 var aiTickInterval = null;
@@ -67,7 +67,9 @@ var battlePlayerScore = 0, battleAiScore = 0;
 var battleTimeRemaining = 180, battleTimerId = null, battleDuration = 180;
 var battleCurrentTurn = null;
 var battlePlayerFrozenUntil = 0, battleAiFrozenUntil = 0;
-var audioCtx = null, bgmGain = null, bgmIntervalId = null, menuMusicIntervalId = null;
+var audioCtx = null, masterGain = null, compressorNode = null, sfxGain = null, musicGain = null;
+var reverbConvolver = null, reverbGain = null, musicElements = {}, activeMusicMode = null, musicTimerId = null;
+var TRACKS = { menu: 'audio/menu.mp3', zen: 'audio/zen.mp3', battle: 'audio/battle.mp3', puzzle: 'audio/puzzle.mp3' };
 var textureCache = {}, materialsCache = {};
 // ── Zen mode background effects ──
 var zenAmbientParticles = null, zenFireworkBursts = [], zenFireworkTimerId = null;
@@ -92,86 +94,257 @@ var trailPoints = null, TRAIL_MAX_PARTICLES = 192;
 var trailParts = null, trailHead = 0, trailLiveCount = 0, trailLastTime = 0;
 
 var AudioEngine = {
-    init: function() { if (audioCtx) return; try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) {} },
-    playTone: function(freq, type, dur, gainVal, slideTo) {
-        if (!soundEnabled || !audioCtx) return; this.init();
-        if (audioCtx.state === 'suspended') audioCtx.resume();
-        var o = audioCtx.createOscillator(), g = audioCtx.createGain();
-        o.type = type; o.frequency.setValueAtTime(freq, audioCtx.currentTime);
-        if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, audioCtx.currentTime + dur);
-        g.gain.setValueAtTime(gainVal, audioCtx.currentTime);
-        g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
-        o.connect(g); g.connect(audioCtx.destination); o.start(); o.stop(audioCtx.currentTime + dur);
+    init: function() {
+        if (audioCtx) return;
+        try {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            masterGain = audioCtx.createGain();
+            masterGain.gain.value = 0.8;
+            compressorNode = audioCtx.createDynamicsCompressor();
+            compressorNode.threshold.value = -12;
+            compressorNode.knee.value = 20;
+            compressorNode.ratio.value = 4;
+            compressorNode.attack.value = 0.003;
+            compressorNode.release.value = 0.25;
+            masterGain.connect(compressorNode);
+            compressorNode.connect(audioCtx.destination);
+            sfxGain = audioCtx.createGain();
+            sfxGain.connect(compressorNode);
+            musicGain = audioCtx.createGain();
+            musicGain.gain.value = 0;
+            musicGain.connect(compressorNode);
+            reverbConvolver = audioCtx.createConvolver();
+            reverbGain = audioCtx.createGain();
+            reverbGain.gain.value = 0.3;
+            reverbGain.connect(compressorNode);
+            var irLen = Math.floor(audioCtx.sampleRate * 2);
+            var irBuffer = audioCtx.createBuffer(2, irLen, audioCtx.sampleRate);
+            for (var ch = 0; ch < 2; ch++) {
+                var irData = irBuffer.getChannelData(ch);
+                for (var i = 0; i < irLen; i++) {
+                    irData[i] = (Math.random() * 2 - 1) * Math.exp(-3.5 * i / irLen);
+                }
+            }
+            reverbConvolver.buffer = irBuffer;
+            reverbConvolver.connect(reverbGain);
+        } catch (e) { /* silent: audio must never break the game */ }
     },
-    playMove: function() { this.playTone(150, 'triangle', 0.08, 0.2, 50); },
-    playRoll: function() {
-        if (!soundEnabled || !audioCtx) return; this.init();
-        if (audioCtx.state === 'suspended') audioCtx.resume();
-        var t = audioCtx.currentTime, dur = 0.2;
-        var o = audioCtx.createOscillator(), g = audioCtx.createGain();
-        o.type = 'triangle'; o.frequency.setValueAtTime(90, t);
-        o.frequency.exponentialRampToValueAtTime(45, t + dur);
-        g.gain.setValueAtTime(0.32, t);
-        g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-        o.connect(g); g.connect(audioCtx.destination); o.start(t); o.stop(t + dur);
-        var bs = Math.floor(audioCtx.sampleRate * dur), nb = audioCtx.createBuffer(1, bs, audioCtx.sampleRate), nd = nb.getChannelData(0);
-        for (var i = 0; i < bs; i++) nd[i] = Math.random() * 2 - 1;
-        var ns = audioCtx.createBufferSource(); ns.buffer = nb;
-        var nf = audioCtx.createBiquadFilter(); nf.type = 'bandpass'; nf.frequency.value = 400; nf.Q.value = 0.7;
-        var ng = audioCtx.createGain(); ng.gain.setValueAtTime(0.18, t);
-        ng.gain.exponentialRampToValueAtTime(0.001, t + dur * 0.6);
-        ns.connect(nf); nf.connect(ng); ng.connect(audioCtx.destination); ns.start(t); ns.stop(t + dur);
-    },
-    playSlide: function() { this.playTone(120, 'triangle', 0.2, 0.18, 70); },
-    playHaptic: function() { if (navigator.vibrate) navigator.vibrate(15); },
-    playMatch: function() { [261.63, 329.63, 392, 523.25].forEach(function(f, i) { setTimeout(function() { AudioEngine.playTone(f, 'sine', 0.3, 0.15, f * 1.5); }, i * 60); }); },
-    playCombo: function(c) { var m = 1 + c * 0.1; this.playTone(880 * m, 'sine', 0.4, 0.2, 1200 * m); },
-    playGameOver: function() { [392, 349.23, 311.13, 246.94].forEach(function(f, i) { setTimeout(function() { AudioEngine.playTone(f, 'triangle', 0.5, 0.2, f * 0.5); }, i * 150); }); },
-    playWin: function() { [261.63, 329.63, 392, 523.25, 659.25].forEach(function(f, i) { setTimeout(function() { AudioEngine.playTone(f, 'sine', 0.35, 0.18, f * 1.3); }, i * 100); }); },
-    playLockBlock: function() { this.playTone(80, 'square', 0.3, 0.25, 40); },
-    startBGM: function() {
-        if (!musicEnabled) return; this.init(); if (audioCtx.state === 'suspended') audioCtx.resume();
-        bgmGain = audioCtx.createGain(); bgmGain.gain.setValueAtTime(0.04, audioCtx.currentTime); bgmGain.connect(audioCtx.destination);
-        var step = 0, melody = [130.81, 164.81, 196, 164.81, 146.83, 174.61, 220, 174.61];
-        bgmIntervalId = setInterval(function() {
-            if (!musicEnabled || !audioCtx) return;
-            var o = audioCtx.createOscillator(); o.type = 'triangle';
-            o.frequency.setValueAtTime(melody[step % melody.length], audioCtx.currentTime);
-            o.connect(bgmGain); o.start(); o.stop(audioCtx.currentTime + 0.35);
-            if (step % 2 === 0) AudioEngine.playNoise(0.05, 0.015); step++;
-        }, 400);
-    },
-    stopBGM: function() { if (bgmIntervalId) { clearInterval(bgmIntervalId); bgmIntervalId = null; } if (bgmGain) { bgmGain.disconnect(); bgmGain = null; } },
-    startMenuMusic: function() {
-        if (!musicEnabled) return; this.init(); if (audioCtx.state === 'suspended') audioCtx.resume();
-        if (menuMusicIntervalId) return;
-        var step = 0;
-        var melody = [523.25, 659.25, 783.99, 1046.50, 783.99, 659.25, 587.33, 698.46, 880.00, 1046.50, 880.00, 698.46, 659.25, 783.99, 987.77, 1174.66];
-        menuMusicIntervalId = setInterval(function() {
-            if (!musicEnabled || !audioCtx) return;
+    tone: function(opts) {
+        if (!soundEnabled || !audioCtx || audioCtx.state === 'suspended') return;
+        try {
+            var t = opts.at || audioCtx.currentTime;
+            var dur = opts.dur || 0.15;
+            var attack = (opts.attack !== undefined) ? opts.attack : 0.005;
+            var release = (opts.release !== undefined) ? opts.release : dur;
+            var peak = opts.gain || 0.2;
             var o = audioCtx.createOscillator();
-            o.type = 'sine';
-            o.frequency.setValueAtTime(melody[step % melody.length], audioCtx.currentTime);
+            o.type = opts.type || 'sine';
+            o.frequency.setValueAtTime(opts.freq, t);
+            if (opts.slideTo) o.frequency.exponentialRampToValueAtTime(opts.slideTo, t + dur);
+            if (opts.detune) o.detune.value = opts.detune;
             var g = audioCtx.createGain();
-            g.gain.setValueAtTime(0.07, audioCtx.currentTime);
-            g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.25);
-            o.connect(g); g.connect(audioCtx.destination); o.start(); o.stop(audioCtx.currentTime + 0.25);
-            step++;
-        }, 180);
+            g.gain.setValueAtTime(0.0001, t);
+            g.gain.linearRampToValueAtTime(peak, t + attack);
+            g.gain.exponentialRampToValueAtTime(0.001, t + attack + release);
+            var out = g;
+            if (opts.pan !== undefined && audioCtx.createStereoPanner) {
+                var pan = audioCtx.createStereoPanner();
+                pan.pan.value = opts.pan;
+                g.connect(pan);
+                out = pan;
+            }
+            if (opts.reverbSend && reverbConvolver) {
+                var send = audioCtx.createGain();
+                send.gain.value = opts.reverbSend;
+                g.connect(send);
+                send.connect(reverbConvolver);
+            }
+            out.connect(sfxGain);
+            o.connect(g);
+            o.start(t);
+            o.stop(t + attack + release + 0.05);
+        } catch (e) { /* silent */ }
     },
-    stopMenuMusic: function() {
-        if (menuMusicIntervalId) { clearInterval(menuMusicIntervalId); menuMusicIntervalId = null; }
+    noiseBurst: function(opts) {
+        if (!soundEnabled || !audioCtx || audioCtx.state === 'suspended') return;
+        try {
+            var t = audioCtx.currentTime;
+            var dur = opts.dur || 0.1;
+            var len = Math.max(1, Math.floor(audioCtx.sampleRate * dur));
+            var buffer = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+            var data = buffer.getChannelData(0);
+            for (var i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+            var src = audioCtx.createBufferSource();
+            src.buffer = buffer;
+            var filter = audioCtx.createBiquadFilter();
+            filter.type = opts.filterType || 'bandpass';
+            filter.frequency.setValueAtTime(opts.freqFrom || 1000, t);
+            if (opts.freqTo) filter.frequency.exponentialRampToValueAtTime(opts.freqTo, t + dur);
+            if (opts.Q) filter.Q.value = opts.Q;
+            var g = audioCtx.createGain();
+            g.gain.setValueAtTime(opts.gain || 0.2, t);
+            g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+            src.connect(filter);
+            filter.connect(g);
+            g.connect(sfxGain);
+            src.start(t);
+            src.stop(t + dur + 0.05);
+        } catch (e) { /* silent */ }
+    },
+    playMove: function() { this.tone({ freq: 130, slideTo: 70, type: 'sine', dur: 0.12, gain: 0.5, attack: 0.005 }); },
+    playRoll: function() {
+        if (!soundEnabled || !audioCtx || audioCtx.state === 'suspended') return;
+        try {
+            var jitter = 1 + (Math.random() * 0.1 - 0.05);
+            this.noiseBurst({ dur: 0.05, gain: 0.25, filterType: 'bandpass', freqFrom: 1200 * jitter, freqTo: 500 * jitter });
+            this.tone({ freq: 170 * jitter, slideTo: 80 * jitter, type: 'triangle', dur: 0.15, gain: 0.35, attack: 0.004 });
+        } catch (e) { /* silent */ }
+    },
+    playSlide: function() { this.noiseBurst({ dur: 0.18, gain: 0.2, filterType: 'bandpass', freqFrom: 500, freqTo: 1800, Q: 0.8 }); },
+    playMatch: function() {
+        if (!soundEnabled || !audioCtx || audioCtx.state === 'suspended') return;
+        try {
+            this.tone({ freq: 660, type: 'sine', dur: 0.35, gain: 0.18, attack: 0.002, detune: -6, reverbSend: 0.5 });
+            this.tone({ freq: 990, type: 'sine', dur: 0.35, gain: 0.16, attack: 0.002, detune: 6, reverbSend: 0.5 });
+            this.noiseBurst({ dur: 0.08, gain: 0.12, filterType: 'highpass', freqFrom: 4000 });
+        } catch (e) { /* silent */ }
+    },
+    playCombo: function(c) {
+        if (!soundEnabled || !audioCtx || audioCtx.state === 'suspended') return;
+        try {
+            var shift = Math.min(parseInt(c, 10) || 1, 5) * 2;
+            var mult = Math.pow(2, shift / 12);
+            var base = [523.25, 659.25, 783.99];
+            var start = audioCtx.currentTime + 0.01;
+            for (var i = 0; i < base.length; i++) {
+                this.tone({ freq: base[i] * mult, type: 'sine', dur: 0.2, gain: 0.16, attack: 0.003, reverbSend: 0.35, at: start + i * 0.06 });
+            }
+            this.tone({ freq: 1046.5 * mult * 2, type: 'sine', dur: 0.35, gain: 0.12, attack: 0.004, reverbSend: 0.4, at: start + base.length * 0.06 });
+        } catch (e) { /* silent */ }
+    },
+    playGameOver: function() {
+        if (!soundEnabled || !audioCtx || audioCtx.state === 'suspended') return;
+        try {
+            var notes = [392, 349.23, 311.13, 233.08];
+            var start = audioCtx.currentTime + 0.01;
+            for (var i = 0; i < notes.length; i++) {
+                this.tone({ freq: notes[i], type: 'triangle', dur: 0.5, gain: 0.22, attack: 0.005, reverbSend: 0.5, at: start + i * 0.28 });
+            }
+            this.tone({ freq: 98, type: 'sine', dur: 1.2, gain: 0.18, attack: 0.02, reverbSend: 0.5, at: start });
+        } catch (e) { /* silent */ }
+    },
+    playWin: function() {
+        if (!soundEnabled || !audioCtx || audioCtx.state === 'suspended') return;
+        try {
+            var notes = [523.25, 659.25, 783.99, 1046.5, 1318.5];
+            var start = audioCtx.currentTime + 0.01;
+            for (var i = 0; i < notes.length; i++) {
+                this.tone({ freq: notes[i], type: 'sine', dur: 0.35, gain: 0.2, attack: 0.003, reverbSend: 0.45, at: start + i * 0.09 });
+                this.tone({ freq: notes[i], type: 'triangle', dur: 0.3, gain: 0.07, attack: 0.003, reverbSend: 0.3, at: start + i * 0.09 });
+            }
+        } catch (e) { /* silent */ }
+    },
+    playLockBlock: function() { this.tone({ freq: 75, slideTo: 45, type: 'square', dur: 0.22, gain: 0.3, attack: 0.004 }); },
+    playHaptic: function() {
+        try { if (navigator.vibrate) navigator.vibrate(15); } catch (e) { /* silent */ }
+        this.tone({ freq: 210, type: 'sine', dur: 0.05, gain: 0.15, attack: 0.002 });
     },
     playNoise: function(dur, gainVal) {
-        if (!soundEnabled || !audioCtx) return;
-        var bs = audioCtx.sampleRate * dur, b = audioCtx.createBuffer(1, bs, audioCtx.sampleRate), d = b.getChannelData(0);
-        for (var i = 0; i < bs; i++) d[i] = Math.random() * 2 - 1;
-        var n = audioCtx.createBufferSource(); n.buffer = b;
-        var f = audioCtx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 5000;
-        var g = audioCtx.createGain(); g.gain.setValueAtTime(gainVal, audioCtx.currentTime);
-        g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
-        n.connect(f); f.connect(g); g.connect(audioCtx.destination); n.start();
-    }
+        this.noiseBurst({ dur: dur || 0.1, gain: gainVal || 0.12, filterType: 'highpass', freqFrom: 5000 });
+    },
+    ensureMusicElement: function(mode) {
+        try {
+            if (!musicElements[mode]) {
+                var el = document.createElement('audio');
+                el.src = TRACKS[mode];
+                el.preload = 'auto';
+                el.loop = true;
+                document.body.appendChild(el);
+                musicElements[mode] = el;
+                if (audioCtx.createMediaElementSource) {
+                    var source = audioCtx.createMediaElementSource(el);
+                    source.connect(musicGain);
+                }
+            }
+            return musicElements[mode];
+        } catch (e) { return null; }
+    },
+    setMusic: function(mode) {
+        if (!musicEnabled || !mode) return;
+        this.init();
+        if (!audioCtx || !musicGain) return;
+        try {
+            var now = audioCtx.currentTime;
+            if (activeMusicMode === mode && musicElements[mode]) {
+                var activeEl = musicElements[mode];
+                musicGain.gain.cancelScheduledValues(now);
+                musicGain.gain.setValueAtTime(Math.max(musicGain.gain.value, 0), now);
+                musicGain.gain.linearRampToValueAtTime(0.55, now + 0.8);
+                var activePlay = null;
+                try { activePlay = activeEl.play(); } catch (e) { activePlay = null; }
+                if (activePlay && activePlay.catch) {
+                    activePlay.catch(function() {
+                        setTimeout(function() { try { activeEl.play().catch(function() {}); } catch (e) { /* silent */ } }, 300);
+                    });
+                }
+                return;
+            }
+            if (musicTimerId) { clearTimeout(musicTimerId); musicTimerId = null; }
+            var current = null;
+            for (var m in musicElements) {
+                if (musicElements[m] && !musicElements[m].paused) { current = musicElements[m]; break; }
+            }
+            if (current && current !== musicElements[mode]) {
+                musicGain.gain.cancelScheduledValues(now);
+                musicGain.gain.setValueAtTime(Math.max(musicGain.gain.value, 0), now);
+                musicGain.gain.linearRampToValueAtTime(0, now + 0.5);
+                musicGain.gain.setValueAtTime(0, now + 0.55);
+                musicGain.gain.linearRampToValueAtTime(0.55, now + 0.55 + 0.8);
+                var currentEl = current;
+                musicTimerId = setTimeout(function() {
+                    musicTimerId = null;
+                    try { if (!currentEl.paused) currentEl.pause(); } catch (e) { /* silent */ }
+                }, 550);
+            }
+            var el = this.ensureMusicElement(mode);
+            if (!el) return;
+            if (!current) {
+                musicGain.gain.cancelScheduledValues(now);
+                musicGain.gain.setValueAtTime(0, now);
+                musicGain.gain.linearRampToValueAtTime(0.55, now + 0.8);
+            }
+            var playResult = null;
+            try { playResult = el.play(); } catch (e) { playResult = null; }
+            if (playResult && playResult.catch) {
+                playResult.catch(function() {
+                    setTimeout(function() { try { el.play().catch(function() {}); } catch (e) { /* silent */ } }, 300);
+                });
+            }
+            activeMusicMode = mode;
+        } catch (e) { /* silent */ }
+    },
+    startBGM: function(mode) { this.setMusic(mode || 'zen'); },
+    stopBGM: function() {
+        try {
+            if (musicTimerId) { clearTimeout(musicTimerId); musicTimerId = null; }
+            if (audioCtx && musicGain) {
+                var now = audioCtx.currentTime;
+                musicGain.gain.cancelScheduledValues(now);
+                musicGain.gain.setValueAtTime(Math.max(musicGain.gain.value, 0), now);
+                musicGain.gain.linearRampToValueAtTime(0, now + 0.5);
+            }
+            var els = musicElements;
+            musicTimerId = setTimeout(function() {
+                musicTimerId = null;
+                try {
+                    for (var m in els) { if (els[m] && !els[m].paused) els[m].pause(); }
+                } catch (e) { /* silent */ }
+            }, 550);
+            activeMusicMode = null;
+        } catch (e) { /* silent */ }
+    },
+    startMenuMusic: function() { this.setMusic('menu'); },
+    stopMenuMusic: function() { this.stopBGM(); }
 };
 
 function getDiceTexture(value, state, rot) {
@@ -1083,11 +1256,11 @@ function findRollableDie() { var cx = Math.floor(GRID_COLS / 2), cy = Math.floor
 function showGestureHint(txt) { var h = document.getElementById('gesture-hint'); document.getElementById('hint-text').innerText = txt; h.classList.remove('gesture-hide'); }
 function hideGestureHint() { document.getElementById('gesture-hint').classList.add('gesture-hide'); }
 
-function startGame(mode) { AudioEngine.stopMenuMusic(); mode = mode || 'zen'; AudioEngine.init(); gameState = 'playing'; gameMode = mode; score = 0; comboCount = 0; animationLock = false; hideAiMoveMarker(); updateScoreDisplay(); hideComboBanner(); hideGestureHint(); initStardust(); initAura(); initTrails(); document.getElementById('menu-screen').classList.remove('active'); document.getElementById('pause-screen').classList.remove('active'); document.getElementById('gameover-screen').classList.remove('active'); document.getElementById('hud-screen').classList.add('active'); document.getElementById('puzzle-hud').style.display = (mode === 'puzzle') ? 'flex' : 'none'; document.getElementById('battle-hud').style.display = (mode === 'battle') ? 'flex' : 'none'; document.getElementById('hud-screen').classList.toggle('hide-highscore', mode === 'battle'); document.getElementById('battle-timer-box').style.display = (mode === 'battle') ? 'block' : 'none'; if (mode === 'puzzle') setupPuzzleMode(); else if (mode === 'battle') setupBattleMode();    else { populateInitialBoard(); startSpawning(); initZenEffects(); } if (musicEnabled) { AudioEngine.stopBGM(); AudioEngine.startBGM(); } updateFullnessBar(countActiveDice() / totalCells); }
+function startGame(mode) { AudioEngine.stopMenuMusic(); mode = mode || 'zen'; AudioEngine.init(); gameState = 'playing'; gameMode = mode; score = 0; comboCount = 0; animationLock = false; hideAiMoveMarker(); updateScoreDisplay(); hideComboBanner(); hideGestureHint(); initStardust(); initAura(); initTrails(); document.getElementById('menu-screen').classList.remove('active'); document.getElementById('pause-screen').classList.remove('active'); document.getElementById('gameover-screen').classList.remove('active'); document.getElementById('hud-screen').classList.add('active'); document.getElementById('puzzle-hud').style.display = (mode === 'puzzle') ? 'flex' : 'none'; document.getElementById('battle-hud').style.display = (mode === 'battle') ? 'flex' : 'none'; document.getElementById('hud-screen').classList.toggle('hide-highscore', mode === 'battle'); document.getElementById('battle-timer-box').style.display = (mode === 'battle') ? 'block' : 'none'; if (mode === 'puzzle') setupPuzzleMode(); else if (mode === 'battle') setupBattleMode();    else { populateInitialBoard(); startSpawning(); initZenEffects(); } AudioEngine.startBGM(mode); updateFullnessBar(countActiveDice() / totalCells); }
 function startSpawning() { stopSpawning(); spawnTimerId = setTimeout(spawnRandomDie, DIFFICULTY_SETTINGS[selectedDifficulty].spawnInterval); }
 function pauseGame() { if (gameState !== 'playing') return; gameState = 'paused'; stopSpawning(); AudioEngine.stopBGM(); document.getElementById('hud-screen').classList.remove('active'); document.getElementById('pause-screen').classList.add('active'); }
-function resumeGame() { if (gameState !== 'paused') return; gameState = 'playing'; document.getElementById('pause-screen').classList.remove('active'); document.getElementById('hud-screen').classList.add('active'); if (gameMode !== 'puzzle') startSpawning(); if (musicEnabled) AudioEngine.startBGM(); }
-function quitToMenu() { gameState = 'menu'; hideAiMoveMarker(); clearZenEffects(); AudioEngine.startMenuMusic(); stopSpawning(); AudioEngine.stopBGM(); if (gameMode === 'battle') { stopAITicks(); stopBattleTimer(); } document.getElementById('pause-screen').classList.remove('active'); document.getElementById('gameover-screen').classList.remove('active'); document.getElementById('hud-screen').classList.remove('active'); document.getElementById('hud-screen').classList.remove('hide-highscore'); document.getElementById('battle-timer-box').style.display = 'none'; document.getElementById('menu-screen').classList.add('active'); document.getElementById('menu-highscore').innerText = Number(highScore).toLocaleString(); clearAllDice(); }
+function resumeGame() { if (gameState !== 'paused') return; gameState = 'playing'; document.getElementById('pause-screen').classList.remove('active'); document.getElementById('hud-screen').classList.add('active'); if (gameMode !== 'puzzle') startSpawning(); AudioEngine.startBGM(gameMode); }
+function quitToMenu() { gameState = 'menu'; hideAiMoveMarker(); clearZenEffects(); AudioEngine.startMenuMusic(); stopSpawning(); if (gameMode === 'battle') { stopAITicks(); stopBattleTimer(); } document.getElementById('pause-screen').classList.remove('active'); document.getElementById('gameover-screen').classList.remove('active'); document.getElementById('hud-screen').classList.remove('active'); document.getElementById('hud-screen').classList.remove('hide-highscore'); document.getElementById('battle-timer-box').style.display = 'none'; document.getElementById('menu-screen').classList.add('active'); document.getElementById('menu-highscore').innerText = Number(highScore).toLocaleString(); clearAllDice(); }
 function clearAllDice() { for (var x = 0; x < GRID_COLS; x++) for (var y = 0; y < GRID_ROWS; y++) { if (grid[x] && grid[x][y]) { diceGroup.remove(grid[x][y].pivotGroup); grid[x][y].mesh.geometry.dispose(); } if (sinkingHighlights[x] && sinkingHighlights[x][y]) sinkingHighlights[x][y].visible = false; } grid = Array(GRID_COLS).fill(null).map(function() { return Array(GRID_ROWS).fill(null); }); activeSinkingGroups = []; }
 
 // ── Zen mode background effects (Tetris Effect style fireworks) ──
@@ -1624,7 +1797,7 @@ var lastFullnessPct = -1;
 function showComboBanner() { var banner = document.getElementById('combo-display'); document.getElementById('combo-count').innerText = comboCount.toString(); banner.classList.remove('combo-hide'); if (comboTmrId) clearTimeout(comboTmrId); comboTmrId = setTimeout(function() { banner.classList.add('combo-hide'); }, 2500); }
 function hideComboBanner() { document.getElementById('combo-display').classList.add('combo-hide'); }
 
-function setupControlListeners() { window.addEventListener('keydown', handleKeyboard); setupPointerEvents(); document.getElementById('zen-btn').addEventListener('click', function() { startGame('zen'); }); document.getElementById('puzzle-btn').addEventListener('click', function() { startGame('puzzle'); }); document.getElementById('battle-btn').addEventListener('click', function() { startGame('battle'); }); document.getElementById('how-to-btn').addEventListener('click', function() { document.getElementById('how-to-modal').classList.add('active'); }); document.getElementById('close-how-to').addEventListener('click', function() { document.getElementById('how-to-modal').classList.remove('active'); }); document.getElementById('settings-btn').addEventListener('click', function() { document.getElementById('board-size').value = boardSize; document.getElementById('sound-toggle').checked = soundEnabled; document.getElementById('music-toggle').checked = musicEnabled; document.getElementById('difficulty').value = selectedDifficulty; document.getElementById('ai-difficulty').value = aiDifficulty; document.getElementById('battle-duration').value = battleDuration; document.getElementById('settings-modal').classList.add('active'); }); document.getElementById('close-settings').addEventListener('click', function() { soundEnabled = document.getElementById('sound-toggle').checked; var mc = document.getElementById('music-toggle').checked; if (mc !== musicEnabled) { musicEnabled = mc; if (gameState === 'playing') { if (musicEnabled) AudioEngine.startBGM(); else AudioEngine.stopBGM(); } else if (gameState === 'menu') { if (musicEnabled) AudioEngine.startMenuMusic(); else AudioEngine.stopMenuMusic(); } } selectedDifficulty = document.getElementById('difficulty').value; aiDifficulty = document.getElementById('ai-difficulty').value; battleDuration = parseInt(document.getElementById('battle-duration').value); var newBoardSize = document.getElementById('board-size').value; if (newBoardSize !== boardSize) { stopSpawning(); clearAllDice(); setBoardSize(newBoardSize); if (gameState === 'playing') startGame(gameMode); else quitToMenu(); } document.getElementById('settings-modal').classList.remove('active'); }); document.getElementById('pause-btn').addEventListener('click', pauseGame); document.getElementById('resume-btn').addEventListener('click', resumeGame); document.getElementById('restart-pause-btn').addEventListener('click', function() { startGame(gameMode); }); document.getElementById('quit-btn').addEventListener('click', quitToMenu); document.getElementById('retry-btn').addEventListener('click', function() { startGame(gameMode); }); document.getElementById('menu-quit-btn').addEventListener('click', quitToMenu); }
+function setupControlListeners() { window.addEventListener('keydown', handleKeyboard); setupPointerEvents(); var audioUnlockDone = false; function unlockAudio() { if (audioUnlockDone) return; audioUnlockDone = true; function startMusic() { if (!musicEnabled) return; if (gameState === 'menu') AudioEngine.startMenuMusic(); else if (gameState === 'playing') AudioEngine.startBGM(gameMode); } /* 1) Synchronous attempt FIRST: Firefox/Safari need play() inside the user-gesture task (an async resume().then() loses the gesture context there). Chrome may resolve it silently while suspended — the resume().then() below re-plays with the ctx running. */ try { startMusic(); } catch (e) { /* silent */ } /* 2) Then resume the context (Chrome's requirement) and retry once it is running. Covers 'suspended' AND 'interrupted' (Chrome Android backgrounding). */ try { if (audioCtx && audioCtx.state !== 'running') { var p = audioCtx.resume(); if (p && p.then) { p.then(startMusic).catch(function() { setTimeout(startMusic, 250); }); } } } catch (e) { try { setTimeout(startMusic, 250); } catch (e2) { /* silent */ } } } window.addEventListener('pointerdown', unlockAudio); window.addEventListener('keydown', unlockAudio); window.addEventListener('touchstart', unlockAudio); window.addEventListener('pointerup', unlockAudio); window.addEventListener('click', unlockAudio); window.addEventListener('mousedown', unlockAudio); document.getElementById('sound-toggle').checked = soundEnabled; document.getElementById('music-toggle').checked = musicEnabled; document.getElementById('sound-toggle').addEventListener('change', function() { soundEnabled = this.checked; }); document.getElementById('music-toggle').addEventListener('change', function() { musicEnabled = this.checked; if (musicEnabled) { if (gameState === 'menu') AudioEngine.startMenuMusic(); else AudioEngine.startBGM(gameMode); } else { AudioEngine.stopBGM(); } }); document.getElementById('zen-btn').addEventListener('click', function() { startGame('zen'); }); document.getElementById('puzzle-btn').addEventListener('click', function() { startGame('puzzle'); }); document.getElementById('battle-btn').addEventListener('click', function() { startGame('battle'); }); document.getElementById('how-to-btn').addEventListener('click', function() { document.getElementById('how-to-modal').classList.add('active'); }); document.getElementById('close-how-to').addEventListener('click', function() { document.getElementById('how-to-modal').classList.remove('active'); }); document.getElementById('settings-btn').addEventListener('click', function() { document.getElementById('board-size').value = boardSize; document.getElementById('sound-toggle').checked = soundEnabled; document.getElementById('music-toggle').checked = musicEnabled; document.getElementById('difficulty').value = selectedDifficulty; document.getElementById('ai-difficulty').value = aiDifficulty; document.getElementById('battle-duration').value = battleDuration; document.getElementById('settings-modal').classList.add('active'); }); document.getElementById('close-settings').addEventListener('click', function() { soundEnabled = document.getElementById('sound-toggle').checked; var mc = document.getElementById('music-toggle').checked; if (mc !== musicEnabled) { musicEnabled = mc; if (gameState === 'playing') { if (musicEnabled) AudioEngine.startBGM(); else AudioEngine.stopBGM(); } else if (gameState === 'menu') { if (musicEnabled) AudioEngine.startMenuMusic(); else AudioEngine.stopMenuMusic(); } } selectedDifficulty = document.getElementById('difficulty').value; aiDifficulty = document.getElementById('ai-difficulty').value; battleDuration = parseInt(document.getElementById('battle-duration').value); var newBoardSize = document.getElementById('board-size').value; if (newBoardSize !== boardSize) { stopSpawning(); clearAllDice(); setBoardSize(newBoardSize); if (gameState === 'playing') startGame(gameMode); else quitToMenu(); } document.getElementById('settings-modal').classList.remove('active'); }); document.getElementById('pause-btn').addEventListener('click', pauseGame); document.getElementById('resume-btn').addEventListener('click', resumeGame); document.getElementById('restart-pause-btn').addEventListener('click', function() { startGame(gameMode); }); document.getElementById('quit-btn').addEventListener('click', quitToMenu); document.getElementById('retry-btn').addEventListener('click', function() { startGame(gameMode); }); document.getElementById('menu-quit-btn').addEventListener('click', quitToMenu); }
 
 var _frameCount = 0, _lastFpsTime = performance.now(), _currentFPS = 60, _lastFrameTime = performance.now();
 function gameLoop() { requestAnimationFrame(gameLoop); _frameCount++; var now = performance.now(); if (now - _lastFpsTime >= 1000) { _currentFPS = Math.round(_frameCount * 1000 / (now - _lastFpsTime)); _frameCount = 0; _lastFpsTime = now; } var dt = Math.min((now - _lastFrameTime) / 1000, 0.05); _lastFrameTime = now; updateNebula(); updateStardust(); updateDynamicLight(); updateCircuitTrace(); updateTrailEmitter(); updateTrails(dt); updateAuraEmitter(); updateAura(); if (renderer && scene && camera) { if (composer) composer.render(); else renderer.render(scene, camera); } if (gameState === 'playing') { updateSinkingDice(); updateSinkingHighlights(); updateZenEffects(); updateAiMoveMarker(); var activeCount = countActiveDice(); updateFullnessBar(activeCount / totalCells); if (gameMode !== 'battle' && activeCount >= totalCells) triggerGameOver(); if (gameMode === 'battle') updateFreezeDisplay(); } }
