@@ -75,6 +75,17 @@
             </div>
         </div>
 
+        <!-- Puzzle Select Screen -->
+        <div id="puzzle-select-screen" class="screen">
+            <div class="puzzle-select-content">
+                <h2>PUZZLE MODE</h2>
+                <p id="puzzle-select-progress" class="puzzle-select-progress">NO STAGES CLEARED YET</p>
+                <button id="puzzle-resume-btn" class="menu-btn primary">RESUME STAGE 1</button>
+                <div id="puzzle-stage-grid"></div>
+                <button id="puzzle-select-close" class="menu-btn">BACK</button>
+            </div>
+        </div>
+
         <!-- Settings Modal -->
         <div id="settings-modal" class="modal">
             <div class="modal-content">
@@ -151,7 +162,7 @@
             <!-- Mode-specific HUD elements -->
             <div id="puzzle-hud" class="mode-hud" style="display:none;">
                 <div class="hud-group mode-stat">
-                    <div id="puzzle-stage" class="hud-label">STAGE 1/10</div>
+                    <div id="puzzle-stage" class="hud-label">STAGE 1/50</div>
                     <div class="hud-label">MOVES LEFT</div>
                     <div id="hud-moves" class="hud-value puzzle-moves">00</div>
                 </div>
@@ -246,6 +257,8 @@
         </div>
     </div>
 
+    <!-- Puzzle Stage Data (must load before game.js) -->
+    <script src="puzzle-stages.js"></script>
     <!-- Main Game Script -->
     <script src="game.js"></script>
 </body>

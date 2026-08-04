@@ -1,4 +1,4 @@
-const CACHE_NAME = 'devildice-v3';
+const CACHE_NAME = 'devildice-v4';
 const ASSETS = [
     './',
     './index.html',
@@ -9,6 +9,8 @@ const ASSETS = [
     'audio/zen.mp3',
     'audio/battle.mp3',
     'audio/puzzle.mp3',
+    'audio/win.mp3',
+    'audio/lose.mp3',
     'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js'
 ];
 

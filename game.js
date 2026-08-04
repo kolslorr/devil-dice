@@ -58,10 +58,12 @@ var scene, camera, renderer, diceGroup, boardGroup, worldGroup;
 var grid = [], score = 0, comboCount = 0;
 var sinkingHighlights = [];
 var highScore = localStorage.getItem('devildice_zen_hs') ? parseInt(localStorage.getItem('devildice_zen_hs')) : 0;
+var puzzleProgress = localStorage.getItem('devildice_puzzle_progress') ? parseInt(localStorage.getItem('devildice_puzzle_progress')) : 0;
 var gameState = 'menu', gameMode = 'zen', selectedDifficulty = 'medium', aiDifficulty = 'medium';
 var soundEnabled = true, musicEnabled = true, spawnTimerId = null, activeSinkingGroups = [];
 var totalCells = GRID_COLS * GRID_ROWS, boardSize = '7x7', animationLock = false;
-var puzzleMovesRemaining = 0, puzzleCleared = false, puzzleStage = 1, puzzleMaxStages = 10;
+var puzzleMovesRemaining = 0, puzzleCleared = false, puzzleStage = 1, puzzleMaxStages = 50;
+var puzzleSavedBoardSize = null;
 var aiTickInterval = null;
 var battlePlayerScore = 0, battleAiScore = 0;
 var battleTimeRemaining = 180, battleTimerId = null, battleDuration = 180;
@@ -69,7 +71,7 @@ var battleCurrentTurn = null;
 var battlePlayerFrozenUntil = 0, battleAiFrozenUntil = 0;
 var audioCtx = null, masterGain = null, compressorNode = null, sfxGain = null, musicGain = null;
 var reverbConvolver = null, reverbGain = null, musicElements = {}, activeMusicMode = null, musicTimerId = null;
-var TRACKS = { menu: 'audio/menu.mp3', zen: 'audio/zen.mp3', battle: 'audio/battle.mp3', puzzle: 'audio/puzzle.mp3' };
+var TRACKS = { menu: 'audio/menu.mp3', zen: 'audio/zen.mp3', battle: 'audio/battle.mp3', puzzle: 'audio/puzzle.mp3', win: 'audio/win.mp3', lose: 'audio/lose.mp3' };
 var textureCache = {}, materialsCache = {};
 // ── Zen mode background effects ──
 var zenAmbientParticles = null, zenFireworkBursts = [], zenFireworkTimerId = null;
@@ -244,6 +246,8 @@ var AudioEngine = {
             }
         } catch (e) { /* silent */ }
     },
+    playVictory: function() { this.setMusic('win'); },   // crossfade BGM -> win track
+    playDefeat: function() { this.setMusic('lose'); },   // crossfade BGM -> lose track
     playLockBlock: function() { this.tone({ freq: 75, slideTo: 45, type: 'square', dur: 0.22, gain: 0.3, attack: 0.004 }); },
     playHaptic: function() {
         try { if (navigator.vibrate) navigator.vibrate(15); } catch (e) { /* silent */ }
@@ -520,7 +524,7 @@ function getDiceMaterials(faces, state) {
     materialsCache[key] = mats; return mats;
 }
 
-function Die(gridX, gridY, topValue, cellType) {
+function Die(gridX, gridY, topValue, cellType, rotY) {
     this.gridX = gridX; this.gridY = gridY;
     this.cellType = (typeof cellType === 'undefined') ? CELL_TYPE.ACTIVE : cellType;
     this.state = (this.cellType === CELL_TYPE.LOCKED) ? 'locked' : 'rising';
@@ -528,7 +532,15 @@ function Die(gridX, gridY, topValue, cellType) {
     this.sinkingGroup = null; this.sinkingTimer = 0;
     this.faces = Object.assign({}, INITIAL_DIE_FACES);
     if (this.cellType === CELL_TYPE.LOCKED) { this.faces = { top: 0, bottom: 0, front: 0, back: 0, left: 0, right: 0 }; }
-    else if (typeof topValue !== 'undefined' && topValue !== null && topValue !== 1) { this.forceTopValue(topValue); }
+    else if (typeof topValue !== 'undefined' && topValue !== null && topValue !== 1) {
+        this.forceTopValue(topValue);
+        if (typeof rotY === 'number') {
+            // Deterministic side faces for authored puzzle dice: neutralize the
+            // random Y-rotation applied by forceTopValue and apply rotY (0..3).
+            this.faces = Object.assign({}, STANDARD_ORIENTATIONS[topValue]);
+            for (var ry = 0; ry < rotY; ry++) this._rotY();
+        }
+    }
     else if (typeof topValue === 'undefined' || topValue === null) { this.forceTopValue(Math.floor(Math.random() * 6) + 1); }
     this.pivotGroup = new THREE.Group();
     var geom = new THREE.BoxGeometry(DIE_SCALE, DIE_SCALE, DIE_SCALE);
@@ -572,11 +584,11 @@ Die.prototype.animateRise = function() {
     requestAnimationFrame(tick);
 };
 Die.prototype.roll = function(direction, onComplete) {
-    if (this.state !== 'normal' && this.state !== 'locked') { if (onComplete) onComplete(); return; }
-    if (this.cellType === CELL_TYPE.LOCKED) { if (onComplete) onComplete(); return; }
+    if (this.state !== 'normal' && this.state !== 'locked') { if (onComplete) onComplete(false); return; }
+    if (this.cellType === CELL_TYPE.LOCKED) { if (onComplete) onComplete(false); return; }
     this.state = 'rolling'; var sx = this.gridX, sy = this.gridY, d = DIRECTIONS[direction], ex = sx + d.dx, ey = sy + d.dy;
-    if (ex < 0 || ex >= GRID_COLS || ey < 0 || ey >= GRID_ROWS) { this.state = 'normal'; if (onComplete) onComplete(); return; }
-    if (grid[ex][ey] !== null) { this.state = 'normal'; AudioEngine.playMove(); if (onComplete) onComplete(); return; }
+    if (ex < 0 || ex >= GRID_COLS || ey < 0 || ey >= GRID_ROWS) { this.state = 'normal'; if (onComplete) onComplete(false); return; }
+    if (grid[ex][ey] !== null) { this.state = 'normal'; AudioEngine.playMove(); if (onComplete) onComplete(false); return; }
     grid[sx][sy] = null; grid[ex][ey] = this; this.gridX = ex; this.gridY = ey;
     var old = Object.assign({}, this.faces), axis = new THREE.Vector3();
     if (direction === 'east') { this.faces.top = old.left; this.faces.right = old.top; this.faces.bottom = old.right; this.faces.left = old.bottom; axis.set(0, 0, -1); }
@@ -595,18 +607,18 @@ Die.prototype.roll = function(direction, onComplete) {
         if (p < 1) requestAnimationFrame(tick);
         else {
             self.pivotGroup.rotation.set(0, 0, 0); self.pivotGroup.position.set(eWX, 0, eWZ);
-            self.state = 'normal'; self.height = 0; self.mesh.material = getDiceMaterials(self.faces, 'normal'); self._syncPivot(); if (onComplete) onComplete();
+            self.state = 'normal'; self.height = 0; self.mesh.material = getDiceMaterials(self.faces, 'normal'); self._syncPivot(); if (onComplete) onComplete(true);
         }
     }
     requestAnimationFrame(tick);
 };
 Die.prototype.slide = function(direction, onComplete) {
-    if (this.state !== 'normal') { if (onComplete) onComplete(); return; }
-    if (this.cellType === CELL_TYPE.LOCKED) { if (onComplete) onComplete(); return; }
+    if (this.state !== 'normal') { if (onComplete) onComplete(false); return; }
+    if (this.cellType === CELL_TYPE.LOCKED) { if (onComplete) onComplete(false); return; }
     var d = DIRECTIONS[direction], tx = this.gridX + d.dx, ty = this.gridY + d.dy;
-    if (tx < 0 || tx >= GRID_COLS || ty < 0 || ty >= GRID_ROWS) { if (onComplete) onComplete(); return; }
+    if (tx < 0 || tx >= GRID_COLS || ty < 0 || ty >= GRID_ROWS) { if (onComplete) onComplete(false); return; }
     if (grid[tx][ty] === null) { this._execSlide(direction, onComplete); return; }
-    if (grid[tx][ty] !== null) { AudioEngine.playMove(); if (onComplete) onComplete(); return; }
+    if (grid[tx][ty] !== null) { AudioEngine.playMove(); if (onComplete) onComplete(false); return; }
 };
 Die.prototype._execSlide = function(direction, onComplete) {
     this.state = 'sliding'; var sx = this.gridX, sy = this.gridY, d = DIRECTIONS[direction], ex = sx + d.dx, ey = sy + d.dy;
@@ -614,7 +626,7 @@ Die.prototype._execSlide = function(direction, onComplete) {
     this.mesh.material = getDiceMaterials(this.faces, 'hover');
     var self = this, startTime = Date.now(), sWX = (sx - (GRID_COLS - 1) / 2) * GRID_SPACING, sWZ = (sy - (GRID_ROWS - 1) / 2) * GRID_SPACING;
     var eWX = (ex - (GRID_COLS - 1) / 2) * GRID_SPACING, eWZ = (ey - (GRID_ROWS - 1) / 2) * GRID_SPACING;
-    function tick() { var p = Math.min((Date.now() - startTime) / SLIDE_DURATION, 1.0), ease = 1 - Math.pow(1 - p, 2); self.pivotGroup.position.set(sWX + ease * (eWX - sWX), 0, sWZ + ease * (eWZ - sWZ)); if (p < 1) requestAnimationFrame(tick); else { self.state = 'normal'; self.height = 0; self.mesh.material = getDiceMaterials(self.faces, 'normal'); self._syncPivot(); if (onComplete) onComplete(); } }
+    function tick() { var p = Math.min((Date.now() - startTime) / SLIDE_DURATION, 1.0), ease = 1 - Math.pow(1 - p, 2); self.pivotGroup.position.set(sWX + ease * (eWX - sWX), 0, sWZ + ease * (eWZ - sWZ)); if (p < 1) requestAnimationFrame(tick); else { self.state = 'normal'; self.height = 0; self.mesh.material = getDiceMaterials(self.faces, 'normal'); self._syncPivot(); if (onComplete) onComplete(true); } }
     requestAnimationFrame(tick);
 };
 Die.prototype.startSinking = function(groupId) { if (this.state === 'sinking') return; this.state = 'sinking'; this.sinkingGroup = groupId; this.sinkingTimer = Date.now(); var isOne = (this.faces.top === 1); this.mesh.material = getDiceMaterials(this.faces, isOne ? 'sinking_one' : 'sinking'); };
@@ -1189,6 +1201,8 @@ function updateTrailEmitter() {
 }
 
 function setBoardSize(sizeKey) { if (!BOARD_PRESETS[sizeKey]) return; var preset = BOARD_PRESETS[sizeKey]; boardSize = sizeKey; GRID_COLS = preset.cols; GRID_ROWS = preset.rows; totalCells = GRID_COLS * GRID_ROWS; grid = Array(GRID_COLS).fill(null).map(function() { return Array(GRID_ROWS).fill(null); }); buildBoard(); setupOrthoCamera(); resizeNebula(); }
+function setPuzzleBoard(cols, rows) { GRID_COLS = cols; GRID_ROWS = rows; totalCells = GRID_COLS * GRID_ROWS; grid = Array(GRID_COLS).fill(null).map(function() { return Array(GRID_ROWS).fill(null); }); buildBoard(); setupOrthoCamera(); resizeNebula(); }
+function restorePuzzleBoardPreset() { if (puzzleSavedBoardSize !== null) { setBoardSize(puzzleSavedBoardSize); puzzleSavedBoardSize = null; } }
 
 function battleAwardScore(points) {
     if (gameMode !== 'battle') { score += points; updateScoreDisplay(); return; }
@@ -1249,18 +1263,18 @@ function onPointerUp(e) { if (inputState.activePtrId !== e.pointerId) return; if
 function raycastDie(cx, cy) { var rect = renderer.domElement.getBoundingClientRect(), mx = ((cx - rect.left) / rect.width) * 2 - 1, my = -((cy - rect.top) / rect.height) * 2 + 1; var rc = new THREE.Raycaster(); rc.setFromCamera(new THREE.Vector2(mx, my), camera); var hits = rc.intersectObjects(diceGroup.children, true); if (hits.length > 0) { var obj = hits[0].object; while (obj && !obj.userData.die) obj = obj.parent; if (obj && obj.userData.die) return obj.userData.die; } return null; }
 function getSwipeDirection(sx, sy, ex, ey) { function projectToGridPlane(cx, cy) { var rect = renderer.domElement.getBoundingClientRect(), mx = ((cx - rect.left) / rect.width) * 2 - 1, my = -((cy - rect.top) / rect.height) * 2 + 1; var rc = new THREE.Raycaster(); rc.setFromCamera(new THREE.Vector2(mx, my), camera); var plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); var pt = new THREE.Vector3(); if (rc.ray.intersectPlane(plane, pt)) return pt; return null; } var p1 = projectToGridPlane(sx, sy), p2 = projectToGridPlane(ex, ey); if (p1 && p2) { var gdx = p2.x - p1.x, gdz = p2.z - p1.z; if (gdx !== 0 && Math.abs(gdx) >= Math.abs(gdz)) return gdx > 0 ? 'east' : 'west'; if (gdz !== 0) return gdz > 0 ? 'south' : 'north'; } var dx = ex - sx, dy = ey - sy, ang = Math.atan2(dy, dx), deg = ang * (180 / Math.PI); if (deg < 0) deg += 360; if (deg >= 0 && deg < 90) return "east"; if (deg >= 90 && deg < 180) return "south"; if (deg >= 180 && deg < 270) return "west"; return "north"; }
 function getGridCellFromPointer(cx, cy) { var rect = renderer.domElement.getBoundingClientRect(), mx = ((cx - rect.left) / rect.width) * 2 - 1, my = -((cy - rect.top) / rect.height) * 2 + 1; var rc = new THREE.Raycaster(); rc.setFromCamera(new THREE.Vector2(mx, my), camera); var plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); var pt = new THREE.Vector3(); if (rc.ray.intersectPlane(plane, pt)) { var gx = Math.round(pt.x / GRID_SPACING + (GRID_COLS - 1) / 2), gy = Math.round(pt.z / GRID_SPACING + (GRID_ROWS - 1) / 2); if (gx >= 0 && gx < GRID_COLS && gy >= 0 && gy < GRID_ROWS) return { gx: gx, gy: gy }; } return null; }
-function triggerRoll(die, dir) { animationLock = true; var turn = gameMode === 'battle' ? 'player' : null; battleCurrentTurn = turn; die.roll(dir, function() { battleCurrentTurn = turn; evaluateRollChain(die); checkAllMatches(); animationLock = false; if (gameMode === 'battle') battleCurrentTurn = null; if (gameMode === 'puzzle') decrementPuzzleMove(); }); }
-function triggerSlide(die, dir) { animationLock = true; var turn = gameMode === 'battle' ? 'player' : null; battleCurrentTurn = turn; die.slide(dir, function() { battleCurrentTurn = turn; evaluateRollChain(die); checkAllMatches(); animationLock = false; if (gameMode === 'battle') battleCurrentTurn = null; if (gameMode === 'puzzle') decrementPuzzleMove(); }); }
+function triggerRoll(die, dir) { animationLock = true; var turn = gameMode === 'battle' ? 'player' : null; battleCurrentTurn = turn; die.roll(dir, function(moved) { battleCurrentTurn = turn; evaluateRollChain(die); checkAllMatches(); animationLock = false; if (gameMode === 'battle') battleCurrentTurn = null; if (gameMode === 'puzzle' && moved) decrementPuzzleMove(); }); }
+function triggerSlide(die, dir) { animationLock = true; var turn = gameMode === 'battle' ? 'player' : null; battleCurrentTurn = turn; die.slide(dir, function(moved) { battleCurrentTurn = turn; evaluateRollChain(die); checkAllMatches(); animationLock = false; if (gameMode === 'battle') battleCurrentTurn = null; if (gameMode === 'puzzle' && moved) decrementPuzzleMove(); }); }
 function handleKeyboard(e) { if (gameState !== 'playing') return; if (gameMode === 'battle' && Date.now() < battlePlayerFrozenUntil) return; var k = e.key.toLowerCase(); if (k === 'p' || k === 'escape') { pauseGame(); return; } var dir = null; if (k === 'arrowup' || k === 'w') dir = 'north'; else if (k === 'arrowdown' || k === 's') dir = 'south'; else if (k === 'arrowleft' || k === 'a') dir = 'west'; else if (k === 'arrowright' || k === 'd') dir = 'east'; else return; var die = findRollableDie(); if (die) triggerRoll(die, dir); }
 function findRollableDie() { var cx = Math.floor(GRID_COLS / 2), cy = Math.floor(GRID_ROWS / 2); for (var r = 0; r < Math.max(GRID_COLS, GRID_ROWS); r++) for (var dx = -r; dx <= r; dx++) for (var dy = -r; dy <= r; dy++) { if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue; var x = cx + dx, y = cy + dy; if (x >= 0 && x < GRID_COLS && y >= 0 && y < GRID_ROWS) { var die = grid[x][y]; if (die && die.state === 'normal' && die.cellType === CELL_TYPE.ACTIVE) return die; } } return null; }
 function showGestureHint(txt) { var h = document.getElementById('gesture-hint'); document.getElementById('hint-text').innerText = txt; h.classList.remove('gesture-hide'); }
 function hideGestureHint() { document.getElementById('gesture-hint').classList.add('gesture-hide'); }
 
-function startGame(mode) { AudioEngine.stopMenuMusic(); mode = mode || 'zen'; AudioEngine.init(); gameState = 'playing'; gameMode = mode; score = 0; comboCount = 0; animationLock = false; hideAiMoveMarker(); updateScoreDisplay(); hideComboBanner(); hideGestureHint(); initStardust(); initAura(); initTrails(); document.getElementById('menu-screen').classList.remove('active'); document.getElementById('pause-screen').classList.remove('active'); document.getElementById('gameover-screen').classList.remove('active'); document.getElementById('hud-screen').classList.add('active'); document.getElementById('puzzle-hud').style.display = (mode === 'puzzle') ? 'flex' : 'none'; document.getElementById('battle-hud').style.display = (mode === 'battle') ? 'flex' : 'none'; document.getElementById('hud-screen').classList.toggle('hide-highscore', mode === 'battle'); document.getElementById('battle-timer-box').style.display = (mode === 'battle') ? 'block' : 'none'; if (mode === 'puzzle') setupPuzzleMode(); else if (mode === 'battle') setupBattleMode();    else { populateInitialBoard(); startSpawning(); initZenEffects(); } AudioEngine.startBGM(mode); updateFullnessBar(countActiveDice() / totalCells); }
+function startGame(mode) { AudioEngine.stopMenuMusic(); mode = mode || 'zen'; AudioEngine.init(); gameState = 'playing'; gameMode = mode; score = 0; comboCount = 0; animationLock = false; hideAiMoveMarker(); updateScoreDisplay(); hideComboBanner(); hideGestureHint(); initStardust(); initAura(); initTrails(); document.getElementById('menu-screen').classList.remove('active'); document.getElementById('puzzle-select-screen').classList.remove('active'); document.getElementById('pause-screen').classList.remove('active'); document.getElementById('gameover-screen').classList.remove('active'); document.getElementById('hud-screen').classList.add('active'); document.getElementById('puzzle-hud').style.display = (mode === 'puzzle') ? 'flex' : 'none'; document.getElementById('battle-hud').style.display = (mode === 'battle') ? 'flex' : 'none'; document.getElementById('hud-screen').classList.toggle('hide-highscore', mode === 'battle'); document.getElementById('battle-timer-box').style.display = (mode === 'battle') ? 'block' : 'none'; if (mode === 'puzzle') setupPuzzleMode(); else if (mode === 'battle') setupBattleMode();    else { populateInitialBoard(); startSpawning(); initZenEffects(); } AudioEngine.startBGM(mode); updateFullnessBar(countActiveDice() / totalCells); }
 function startSpawning() { stopSpawning(); spawnTimerId = setTimeout(spawnRandomDie, DIFFICULTY_SETTINGS[selectedDifficulty].spawnInterval); }
 function pauseGame() { if (gameState !== 'playing') return; gameState = 'paused'; stopSpawning(); AudioEngine.stopBGM(); document.getElementById('hud-screen').classList.remove('active'); document.getElementById('pause-screen').classList.add('active'); }
 function resumeGame() { if (gameState !== 'paused') return; gameState = 'playing'; document.getElementById('pause-screen').classList.remove('active'); document.getElementById('hud-screen').classList.add('active'); if (gameMode !== 'puzzle') startSpawning(); AudioEngine.startBGM(gameMode); }
-function quitToMenu() { gameState = 'menu'; hideAiMoveMarker(); clearZenEffects(); AudioEngine.startMenuMusic(); stopSpawning(); if (gameMode === 'battle') { stopAITicks(); stopBattleTimer(); } document.getElementById('pause-screen').classList.remove('active'); document.getElementById('gameover-screen').classList.remove('active'); document.getElementById('hud-screen').classList.remove('active'); document.getElementById('hud-screen').classList.remove('hide-highscore'); document.getElementById('battle-timer-box').style.display = 'none'; document.getElementById('menu-screen').classList.add('active'); document.getElementById('menu-highscore').innerText = Number(highScore).toLocaleString(); clearAllDice(); }
+function quitToMenu() { gameState = 'menu'; hideAiMoveMarker(); clearZenEffects(); AudioEngine.startMenuMusic(); stopSpawning(); if (gameMode === 'battle') { stopAITicks(); stopBattleTimer(); } document.getElementById('pause-screen').classList.remove('active'); document.getElementById('gameover-screen').classList.remove('active'); document.getElementById('hud-screen').classList.remove('active'); document.getElementById('hud-screen').classList.remove('hide-highscore'); document.getElementById('battle-timer-box').style.display = 'none'; document.getElementById('menu-screen').classList.add('active'); document.getElementById('menu-highscore').innerText = Number(highScore).toLocaleString(); clearAllDice(); if (gameMode === 'puzzle') restorePuzzleBoardPreset(); }
 function clearAllDice() { for (var x = 0; x < GRID_COLS; x++) for (var y = 0; y < GRID_ROWS; y++) { if (grid[x] && grid[x][y]) { diceGroup.remove(grid[x][y].pivotGroup); grid[x][y].mesh.geometry.dispose(); } if (sinkingHighlights[x] && sinkingHighlights[x][y]) sinkingHighlights[x][y].visible = false; } grid = Array(GRID_COLS).fill(null).map(function() { return Array(GRID_ROWS).fill(null); }); activeSinkingGroups = []; }
 
 // ── Zen mode background effects (Tetris Effect style fireworks) ──
@@ -1612,20 +1626,30 @@ function updateZenEffects() {
         }
     }
 }
-function triggerGameOver() { AudioEngine.stopMenuMusic(); hideAiMoveMarker(); clearZenEffects(); gameState = 'gameover'; stopSpawning(); AudioEngine.stopBGM(); var isBattle = gameMode === 'battle', playerWon = battlePlayerScore >= battleAiScore; if (isBattle && playerWon) AudioEngine.playWin(); else AudioEngine.playGameOver(); if (gameMode === 'battle') { stopAITicks(); stopBattleTimer(); } var isNewHigh = false; if (gameMode !== 'battle' && score > highScore) { highScore = score; localStorage.setItem('devildice_zen_hs', highScore); isNewHigh = true; } document.getElementById('go-score').innerText = (gameMode === 'battle' ? battlePlayerScore : score).toLocaleString(); document.getElementById('go-combo').innerText = comboCount.toString(); document.getElementById('new-high-indicator').style.display = isNewHigh ? 'block' : 'none'; var titleEl = document.getElementById('gameover-title-text'); if (gameMode === 'puzzle') titleEl.innerText = puzzleCleared ? 'ALL PUZZLES CLEARED!' : 'OUT OF MOVES!'; else if (isBattle) titleEl.innerText = playerWon ? 'YOU WIN!' : 'YOU LOSE!'; else titleEl.innerText = 'BOARD FILLED!'; document.getElementById('battle-go-stats').style.display = isBattle ? '' : 'none'; if (isBattle) { document.getElementById('go-player-score').innerText = battlePlayerScore.toLocaleString(); document.getElementById('go-ai-score').innerText = battleAiScore.toLocaleString(); var pr = document.getElementById('go-player-row'), ar = document.getElementById('go-ai-row'); if (playerWon) { pr.classList.add('winner'); ar.classList.remove('winner'); } else { ar.classList.add('winner'); pr.classList.remove('winner'); } } else { document.getElementById('go-player-row').classList.remove('winner'); document.getElementById('go-ai-row').classList.remove('winner'); } document.getElementById('hud-screen').classList.remove('active'); document.getElementById('gameover-screen').classList.add('active'); document.getElementById('battle-timer-box').style.display = 'none'; }
+function triggerGameOver() { AudioEngine.stopMenuMusic(); hideAiMoveMarker(); clearZenEffects(); gameState = 'gameover'; stopSpawning(); AudioEngine.stopBGM(); if (gameMode === 'puzzle') { clearAllDice(); restorePuzzleBoardPreset(); } var isBattle = gameMode === 'battle', playerWon = battlePlayerScore >= battleAiScore; var won = (isBattle && playerWon) || (gameMode === 'puzzle' && puzzleCleared); if (won) AudioEngine.playVictory(); else AudioEngine.playDefeat(); if (gameMode === 'battle') { stopAITicks(); stopBattleTimer(); } var isNewHigh = false; if (gameMode !== 'battle' && score > highScore) { highScore = score; localStorage.setItem('devildice_zen_hs', highScore); isNewHigh = true; } document.getElementById('go-score').innerText = (gameMode === 'battle' ? battlePlayerScore : score).toLocaleString(); document.getElementById('go-combo').innerText = comboCount.toString(); document.getElementById('new-high-indicator').style.display = isNewHigh ? 'block' : 'none'; var titleEl = document.getElementById('gameover-title-text'); if (gameMode === 'puzzle') titleEl.innerText = puzzleCleared ? 'ALL PUZZLES CLEARED!' : 'OUT OF MOVES!'; else if (isBattle) titleEl.innerText = playerWon ? 'YOU WIN!' : 'YOU LOSE!'; else titleEl.innerText = 'BOARD FILLED!'; document.getElementById('battle-go-stats').style.display = isBattle ? '' : 'none'; if (isBattle) { document.getElementById('go-player-score').innerText = battlePlayerScore.toLocaleString(); document.getElementById('go-ai-score').innerText = battleAiScore.toLocaleString(); var pr = document.getElementById('go-player-row'), ar = document.getElementById('go-ai-row'); if (playerWon) { pr.classList.add('winner'); ar.classList.remove('winner'); } else { ar.classList.add('winner'); pr.classList.remove('winner'); } } else { document.getElementById('go-player-row').classList.remove('winner'); document.getElementById('go-ai-row').classList.remove('winner'); } document.getElementById('hud-screen').classList.remove('active'); document.getElementById('gameover-screen').classList.add('active'); document.getElementById('battle-timer-box').style.display = 'none'; }
 
-function setupPuzzleMode() { puzzleStage = 1; setupPuzzleStage(); }
+function setupPuzzleMode() {
+    if (typeof window._puzzleChosenStage === 'number') puzzleStage = window._puzzleChosenStage;
+    else puzzleStage = Math.min(puzzleProgress + 1, puzzleMaxStages);
+    window._puzzleChosenStage = null;
+    puzzleSavedBoardSize = boardSize;
+    setupPuzzleStage();
+}
 function setupPuzzleStage() {
     clearAllDice(); puzzleCleared = false;
-    var stage = puzzleStage;
-    var moveBase = 5, movePerStage = 3;
-    puzzleMovesRemaining = moveBase + stage * movePerStage + Math.floor(Math.random() * 4);
+    var stageDef = PUZZLE_STAGES[puzzleStage - 1];
+    puzzleMovesRemaining = stageDef.moves;
     document.getElementById('hud-moves').innerText = String(puzzleMovesRemaining).padStart(2, '0');
-    document.getElementById('puzzle-stage').innerText = 'STAGE ' + stage + '/' + puzzleMaxStages;
-    var layout = generatePuzzleLayout(stage);
-    layout.forEach(function(item) {
+    document.getElementById('puzzle-stage').innerText = 'STAGE ' + puzzleStage + '/' + puzzleMaxStages;
+    setPuzzleBoard(stageDef.board.cols, stageDef.board.rows);
+    stageDef.walls.forEach(function(w) {
+        if (w.x >= 0 && w.x < GRID_COLS && w.y >= 0 && w.y < GRID_ROWS && !grid[w.x][w.y]) {
+            grid[w.x][w.y] = new Die(w.x, w.y, 0, CELL_TYPE.LOCKED);
+        }
+    });
+    stageDef.dice.forEach(function(item) {
         if (item.x >= 0 && item.x < GRID_COLS && item.y >= 0 && item.y < GRID_ROWS && !grid[item.x][item.y]) {
-            var d = new Die(item.x, item.y, item.v);
+            var d = new Die(item.x, item.y, item.v, undefined, item.rot);
             d.state = 'normal'; d.height = 0;
             d.mesh.material = getDiceMaterials(d.faces, 'normal');
             d.updateMeshPosition();
@@ -1634,66 +1658,24 @@ function setupPuzzleStage() {
     });
     updateFullnessBar(countActiveDice() / totalCells);
 }
-function generatePuzzleLayout(stage) {
-    var dice = [], placed = {};
-    var cols = GRID_COLS, rows = GRID_ROWS;
-    var minX = 1, maxX = cols - 2, minY = 1, maxY = rows - 2;
-    function add(x, y, v) { var k = x + ',' + y; if (!placed[k] && x >= minX && x <= maxX && y >= minY && y <= maxY) { placed[k] = true; dice.push({ x: x, y: y, v: v }); } }
-    function randInt(n) { return Math.floor(Math.random() * n); }
-    var numGroups = 2 + Math.floor(stage / 2);
-    var groupSize = 3 + Math.floor(stage / 3);
-    var targetVals = stage <= 3 ? [3, 4] : stage <= 6 ? [3, 4, 5] : [4, 5, 6];
-    var extraOnes = stage <= 4 ? 1 : stage <= 7 ? 2 : 3;
-    for (var g = 0; g < numGroups; g++) {
-        var val = targetVals[randInt(targetVals.length)];
-        var sx = minX + randInt(maxX - minX - groupSize + 1);
-        var sy = minY + randInt(maxY - minY - groupSize + 1);
-        var pattern = randInt(5);
-        if (pattern === 0) {
-            for (var i = 0; i < groupSize; i++) add(sx + i, sy, val);
-            if (randInt(3) === 0 && sy < maxY) add(sx + randInt(groupSize), sy + 1, val);
-        } else if (pattern === 1) {
-            for (var i = 0; i < groupSize; i++) add(sx, sy + i, val);
-            if (randInt(3) === 0 && sx < maxX) add(sx + 1, sy + randInt(groupSize), val);
-        } else if (pattern === 2) {
-            var mid = Math.floor(groupSize / 2);
-            for (var i = 0; i < groupSize; i++) add(sx + i, sy + mid, val);
-            if (mid > 0 && sy + mid - 1 >= minY) add(sx + mid, sy + mid - 1, val);
-            if (sy + mid + 1 <= maxY) add(sx + mid, sy + mid + 1, val);
-        } else if (pattern === 3) {
-            for (var i = 0; i < groupSize; i++) {
-                add(sx + i, sy, val);
-                if (sy + 1 <= maxY && randInt(2) === 0) add(sx + i, sy + 1, val);
-            }
-        } else {
-            for (var i = 0; i < groupSize; i++) {
-                add(sx + (i % 2), sy + Math.floor(i / 2), val);
-            }
-            if (groupSize > 3 && randInt(2) === 0) add(sx + 2, sy + Math.floor(groupSize / 2), val);
-        }
-    }
-    for (var o = 0; o < extraOnes; o++) {
-        for (var attempts = 0; attempts < 20; attempts++) {
-            var ox = minX + randInt(maxX - minX + 1);
-            var oy = minY + randInt(maxY - minY + 1);
-            if (add(ox, oy, 1)) break;
-        }
-    }
-    return dice;
-}
 function decrementPuzzleMove() {
     puzzleMovesRemaining--;
     document.getElementById('hud-moves').innerText = String(Math.max(0, puzzleMovesRemaining)).padStart(2, '0');
     if (countPuzzleRemaining() === 0) {
         puzzleCleared = true;
+        AudioEngine.playVictory();
         score += puzzleMovesRemaining * 500 + puzzleStage * 1000;
         updateScoreDisplay();
+        if (puzzleStage > puzzleProgress) {
+            puzzleProgress = puzzleStage;
+            localStorage.setItem('devildice_puzzle_progress', String(puzzleProgress));
+        }
         if (puzzleStage >= puzzleMaxStages) {
             triggerGameOver();
         } else {
             puzzleStage++;
             showStageClearBanner();
-            setTimeout(function() { hideStageClearBanner(); setupPuzzleStage(); }, 1800);
+            setTimeout(function() { hideStageClearBanner(); setupPuzzleStage(); AudioEngine.startBGM('puzzle'); }, 2200);
         }
         return;
     }
@@ -1797,7 +1779,35 @@ var lastFullnessPct = -1;
 function showComboBanner() { var banner = document.getElementById('combo-display'); document.getElementById('combo-count').innerText = comboCount.toString(); banner.classList.remove('combo-hide'); if (comboTmrId) clearTimeout(comboTmrId); comboTmrId = setTimeout(function() { banner.classList.add('combo-hide'); }, 2500); }
 function hideComboBanner() { document.getElementById('combo-display').classList.add('combo-hide'); }
 
-function setupControlListeners() { window.addEventListener('keydown', handleKeyboard); setupPointerEvents(); var audioUnlockDone = false; function unlockAudio() { if (audioUnlockDone) return; audioUnlockDone = true; function startMusic() { if (!musicEnabled) return; if (gameState === 'menu') AudioEngine.startMenuMusic(); else if (gameState === 'playing') AudioEngine.startBGM(gameMode); } /* 1) Synchronous attempt FIRST: Firefox/Safari need play() inside the user-gesture task (an async resume().then() loses the gesture context there). Chrome may resolve it silently while suspended — the resume().then() below re-plays with the ctx running. */ try { startMusic(); } catch (e) { /* silent */ } /* 2) Then resume the context (Chrome's requirement) and retry once it is running. Covers 'suspended' AND 'interrupted' (Chrome Android backgrounding). */ try { if (audioCtx && audioCtx.state !== 'running') { var p = audioCtx.resume(); if (p && p.then) { p.then(startMusic).catch(function() { setTimeout(startMusic, 250); }); } } } catch (e) { try { setTimeout(startMusic, 250); } catch (e2) { /* silent */ } } } window.addEventListener('pointerdown', unlockAudio); window.addEventListener('keydown', unlockAudio); window.addEventListener('touchstart', unlockAudio); window.addEventListener('pointerup', unlockAudio); window.addEventListener('click', unlockAudio); window.addEventListener('mousedown', unlockAudio); document.getElementById('sound-toggle').checked = soundEnabled; document.getElementById('music-toggle').checked = musicEnabled; document.getElementById('sound-toggle').addEventListener('change', function() { soundEnabled = this.checked; }); document.getElementById('music-toggle').addEventListener('change', function() { musicEnabled = this.checked; if (musicEnabled) { if (gameState === 'menu') AudioEngine.startMenuMusic(); else AudioEngine.startBGM(gameMode); } else { AudioEngine.stopBGM(); } }); document.getElementById('zen-btn').addEventListener('click', function() { startGame('zen'); }); document.getElementById('puzzle-btn').addEventListener('click', function() { startGame('puzzle'); }); document.getElementById('battle-btn').addEventListener('click', function() { startGame('battle'); }); document.getElementById('how-to-btn').addEventListener('click', function() { document.getElementById('how-to-modal').classList.add('active'); }); document.getElementById('close-how-to').addEventListener('click', function() { document.getElementById('how-to-modal').classList.remove('active'); }); document.getElementById('settings-btn').addEventListener('click', function() { document.getElementById('board-size').value = boardSize; document.getElementById('sound-toggle').checked = soundEnabled; document.getElementById('music-toggle').checked = musicEnabled; document.getElementById('difficulty').value = selectedDifficulty; document.getElementById('ai-difficulty').value = aiDifficulty; document.getElementById('battle-duration').value = battleDuration; document.getElementById('settings-modal').classList.add('active'); }); document.getElementById('close-settings').addEventListener('click', function() { soundEnabled = document.getElementById('sound-toggle').checked; var mc = document.getElementById('music-toggle').checked; if (mc !== musicEnabled) { musicEnabled = mc; if (gameState === 'playing') { if (musicEnabled) AudioEngine.startBGM(); else AudioEngine.stopBGM(); } else if (gameState === 'menu') { if (musicEnabled) AudioEngine.startMenuMusic(); else AudioEngine.stopMenuMusic(); } } selectedDifficulty = document.getElementById('difficulty').value; aiDifficulty = document.getElementById('ai-difficulty').value; battleDuration = parseInt(document.getElementById('battle-duration').value); var newBoardSize = document.getElementById('board-size').value; if (newBoardSize !== boardSize) { stopSpawning(); clearAllDice(); setBoardSize(newBoardSize); if (gameState === 'playing') startGame(gameMode); else quitToMenu(); } document.getElementById('settings-modal').classList.remove('active'); }); document.getElementById('pause-btn').addEventListener('click', pauseGame); document.getElementById('resume-btn').addEventListener('click', resumeGame); document.getElementById('restart-pause-btn').addEventListener('click', function() { startGame(gameMode); }); document.getElementById('quit-btn').addEventListener('click', quitToMenu); document.getElementById('retry-btn').addEventListener('click', function() { startGame(gameMode); }); document.getElementById('menu-quit-btn').addEventListener('click', quitToMenu); }
+function openPuzzleSelect() {
+    var progress = puzzleProgress;
+    var resumeStage = Math.min(progress + 1, puzzleMaxStages);
+    var progressEl = document.getElementById('puzzle-select-progress');
+    if (progress <= 0) progressEl.innerText = 'NO STAGES CLEARED YET';
+    else if (progress >= puzzleMaxStages) progressEl.innerText = 'ALL 50 STAGES CLEARED!';
+    else progressEl.innerText = 'STAGE ' + progress + ' CLEARED — RESUME AT STAGE ' + resumeStage;
+    var resumeBtn = document.getElementById('puzzle-resume-btn');
+    resumeBtn.innerText = 'RESUME STAGE ' + resumeStage;
+    var gridEl = document.getElementById('puzzle-stage-grid');
+    gridEl.innerHTML = '';
+    for (var i = 1; i <= puzzleMaxStages; i++) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'puzzle-tile';
+        if (i <= progress) btn.classList.add('solved');
+        if (i === resumeStage) btn.classList.add('current');
+        if (i > resumeStage) { btn.classList.add('locked'); btn.disabled = true; }
+        btn.innerText = (i <= progress) ? (i + ' \u2713') : String(i);
+        if (i <= resumeStage) {
+            (function(n) { btn.addEventListener('click', function() { startPuzzleAt(n); }); })(i);
+        }
+        gridEl.appendChild(btn);
+    }
+    document.getElementById('menu-screen').classList.remove('active');
+    document.getElementById('puzzle-select-screen').classList.add('active');
+}
+function startPuzzleAt(n) { window._puzzleChosenStage = n; startGame('puzzle'); }
+function setupControlListeners() { window.addEventListener('keydown', handleKeyboard); setupPointerEvents(); var audioUnlockDone = false; function unlockAudio() { if (audioUnlockDone) return; audioUnlockDone = true; function startMusic() { if (!musicEnabled) return; if (gameState === 'menu') AudioEngine.startMenuMusic(); else if (gameState === 'playing') AudioEngine.startBGM(gameMode); } /* 1) Synchronous attempt FIRST: Firefox/Safari need play() inside the user-gesture task (an async resume().then() loses the gesture context there). Chrome may resolve it silently while suspended — the resume().then() below re-plays with the ctx running. */ try { startMusic(); } catch (e) { /* silent */ } /* 2) Then resume the context (Chrome's requirement) and retry once it is running. Covers 'suspended' AND 'interrupted' (Chrome Android backgrounding). */ try { if (audioCtx && audioCtx.state !== 'running') { var p = audioCtx.resume(); if (p && p.then) { p.then(startMusic).catch(function() { setTimeout(startMusic, 250); }); } } } catch (e) { try { setTimeout(startMusic, 250); } catch (e2) { /* silent */ } } } window.addEventListener('pointerdown', unlockAudio); window.addEventListener('keydown', unlockAudio); window.addEventListener('touchstart', unlockAudio); window.addEventListener('pointerup', unlockAudio); window.addEventListener('click', unlockAudio); window.addEventListener('mousedown', unlockAudio); document.getElementById('sound-toggle').checked = soundEnabled; document.getElementById('music-toggle').checked = musicEnabled; document.getElementById('sound-toggle').addEventListener('change', function() { soundEnabled = this.checked; }); document.getElementById('music-toggle').addEventListener('change', function() { musicEnabled = this.checked; if (musicEnabled) { if (gameState === 'menu') AudioEngine.startMenuMusic(); else AudioEngine.startBGM(gameMode); } else { AudioEngine.stopBGM(); } }); document.getElementById('zen-btn').addEventListener('click', function() { startGame('zen'); }); document.getElementById('puzzle-btn').addEventListener('click', function() { openPuzzleSelect(); }); document.getElementById('puzzle-resume-btn').addEventListener('click', function() { startPuzzleAt(Math.min(puzzleProgress + 1, puzzleMaxStages)); }); document.getElementById('puzzle-select-close').addEventListener('click', function() { document.getElementById('puzzle-select-screen').classList.remove('active'); document.getElementById('menu-screen').classList.add('active'); }); document.getElementById('battle-btn').addEventListener('click', function() { startGame('battle'); }); document.getElementById('how-to-btn').addEventListener('click', function() { document.getElementById('how-to-modal').classList.add('active'); }); document.getElementById('close-how-to').addEventListener('click', function() { document.getElementById('how-to-modal').classList.remove('active'); }); document.getElementById('settings-btn').addEventListener('click', function() { document.getElementById('board-size').value = boardSize; document.getElementById('sound-toggle').checked = soundEnabled; document.getElementById('music-toggle').checked = musicEnabled; document.getElementById('difficulty').value = selectedDifficulty; document.getElementById('ai-difficulty').value = aiDifficulty; document.getElementById('battle-duration').value = battleDuration; document.getElementById('settings-modal').classList.add('active'); }); document.getElementById('close-settings').addEventListener('click', function() { soundEnabled = document.getElementById('sound-toggle').checked; var mc = document.getElementById('music-toggle').checked; if (mc !== musicEnabled) { musicEnabled = mc; if (gameState === 'playing') { if (musicEnabled) AudioEngine.startBGM(); else AudioEngine.stopBGM(); } else if (gameState === 'menu') { if (musicEnabled) AudioEngine.startMenuMusic(); else AudioEngine.stopMenuMusic(); } } selectedDifficulty = document.getElementById('difficulty').value; aiDifficulty = document.getElementById('ai-difficulty').value; battleDuration = parseInt(document.getElementById('battle-duration').value); var newBoardSize = document.getElementById('board-size').value; if (newBoardSize !== boardSize) { stopSpawning(); clearAllDice(); setBoardSize(newBoardSize); if (gameState === 'playing') startGame(gameMode); else quitToMenu(); } document.getElementById('settings-modal').classList.remove('active'); }); document.getElementById('pause-btn').addEventListener('click', pauseGame); document.getElementById('resume-btn').addEventListener('click', resumeGame); document.getElementById('restart-pause-btn').addEventListener('click', function() { startGame(gameMode); }); document.getElementById('quit-btn').addEventListener('click', quitToMenu); document.getElementById('retry-btn').addEventListener('click', function() { if (gameMode === 'puzzle') { if (puzzleCleared) { quitToMenu(); return; } window._puzzleChosenStage = puzzleStage; startGame('puzzle'); return; } startGame(gameMode); }); document.getElementById('menu-quit-btn').addEventListener('click', quitToMenu); }
 
 var _frameCount = 0, _lastFpsTime = performance.now(), _currentFPS = 60, _lastFrameTime = performance.now();
 function gameLoop() { requestAnimationFrame(gameLoop); _frameCount++; var now = performance.now(); if (now - _lastFpsTime >= 1000) { _currentFPS = Math.round(_frameCount * 1000 / (now - _lastFpsTime)); _frameCount = 0; _lastFpsTime = now; } var dt = Math.min((now - _lastFrameTime) / 1000, 0.05); _lastFrameTime = now; updateNebula(); updateStardust(); updateDynamicLight(); updateCircuitTrace(); updateTrailEmitter(); updateTrails(dt); updateAuraEmitter(); updateAura(); if (renderer && scene && camera) { if (composer) composer.render(); else renderer.render(scene, camera); } if (gameState === 'playing') { updateSinkingDice(); updateSinkingHighlights(); updateZenEffects(); updateAiMoveMarker(); var activeCount = countActiveDice(); updateFullnessBar(activeCount / totalCells); if (gameMode !== 'battle' && activeCount >= totalCells) triggerGameOver(); if (gameMode === 'battle') updateFreezeDisplay(); } }
