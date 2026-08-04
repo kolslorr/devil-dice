@@ -8,6 +8,9 @@
     "baseline": "node tests/playtester.js --baseline"
   },
   "dependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/cli": "^8.5.0",
+    "@capacitor/core": "^8.5.0",
     "canvas": "^3.0.0",
     "pixelmatch": "^6.0.0",
     "puppeteer": "^25.1.0"

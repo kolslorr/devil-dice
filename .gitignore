@@ -7,3 +7,6 @@ issues/
 __pycache__/
 *.pyc
 .hermes/
+dist/
+build-assets/
+android/keystore.properties
