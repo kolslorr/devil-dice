@@ -1,5 +1,13 @@
 ---
-title: "Fix bloom blurriness / overblown rendering — restore crisp geometry, keep subtle glow"
+title: "Fix bloom blurriness / overblown rendering — restore crisp geometry, keep subtle glow" (CANCELLED)
+status: cancelled
+cancelled_reason: Superseded by req 05 (high-end visual polish) — bloom tuning shipped in the visual overhaul checkpoint (2026-08-02).
+---
+
+# CANCELLED — see note above.
+
+---
+title: "Fix bloom blurriness"
 priority: 1
 ---
 

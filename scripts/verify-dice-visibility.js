@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Dice-visibility probe for devil-dice (req 06).
+// Dice-visibility probe for dicefall (req 06).
 // Quantifies "dice blend into the background": renders the game headless,
 // samples screenshot patches at occupied-cell screen positions vs empty-cell
 // (bare board) positions, and reports the luminance separation + pip contrast.

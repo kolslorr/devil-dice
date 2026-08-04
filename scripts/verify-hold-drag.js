@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Hold-drag gesture probe for devil-dice (user: "drag and drop regressed, top-left buggy").
+// Hold-drag gesture probe for dicefall (user: "drag and drop regressed, top-left buggy").
 // Hold-drag = pointerdown -> wait >200ms (hold engages) -> drag to adjacent cell -> die SLIDES.
 // Tests: N/S/E/W orthogonal drags + the NW diagonal path (the complaint).
 // Also counts pointercancel (mobile browser gesture hijack would show here).

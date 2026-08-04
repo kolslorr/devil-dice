@@ -1,4 +1,4 @@
-const CACHE_NAME = 'devildice-v4';
+const CACHE_NAME = 'dicefall-v1';
 const ASSETS = [
     './',
     './index.html',

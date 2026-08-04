@@ -36,7 +36,7 @@ const puppeteer = require('/home/kolslorr/workspace/devil-dice/node_modules/pupp
     check(s === 200, `fetch ${f} -> ${s}`);
   }
   const sw = await page.evaluate(async () => (await (await fetch('/sw.js')).text()));
-  check(/devildice-v4/.test(sw), 'sw.js cache = devildice-v4');
+  check(/dicefall-v1/.test(sw), 'sw.js cache = dicefall-v1');
   check(sw.includes('audio/win.mp3') && sw.includes('audio/lose.mp3'), 'sw.js precaches win/lose tracks');
 
   // 2. puzzle stage clear -> win -> puzzle

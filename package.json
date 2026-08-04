@@ -1,8 +1,8 @@
 {
-  "name": "devil-dice-3d",
+  "name": "dicefall",
   "version": "1.0.0",
   "private": true,
-  "description": "Devil Dice 3D - self-contained Three.js dice puzzle with a headless playtester",
+  "description": "Dicefall - self-contained Three.js dice-matching puzzle with a headless playtester",
   "scripts": {
     "playtest": "node tests/playtester.js",
     "baseline": "node tests/playtester.js --baseline"

@@ -1,6 +1,6 @@
-# Devil Dice 3D
+# Dicefall
 
-A high-fidelity, responsive, 100% self-contained 3D recreation of the classic PlayStation game **Devil Dice** (known as **XI** in Japan), optimized for mobile devices (iOS/Android) and modern desktop web browsers.
+A high-fidelity, responsive, 100% self-contained **3D dice-matching puzzle**: roll the dice, match identical top faces, and clear them in cascading chains — across Zen (endless), AI Battle, and 50 handcrafted Puzzle stages. Optimized for mobile devices (iOS/Android) and modern desktop web browsers.
 
 This game is built with pure, lightweight **HTML5, CSS3, and modern ECMAScript/Three.js WebGL**. It runs entirely in the client with **zero external game assets to download** — all textures and sound effects are generated procedurally in code! The only external library is Three.js, fetched once from a CDN and cached by the service worker for offline play. This ensures fast load times, seamless offline play, and absolute reliability when packaged for native mobile distribution.
 
@@ -80,7 +80,7 @@ npm install @capacitor/core @capacitor/cli
 
 #### 2. Initialize Capacitor Config
 ```bash
-npx cap init "Devil Dice 3D" "com.yourname.devildice3d" --web-dir=.
+npx cap init "Dicefall" "com.kolslorr.dicefall" --web-dir=.
 ```
 *Note: We set `--web-dir=.` because our index.html and static files are in the root folder.*
 
@@ -121,8 +121,8 @@ To make this a PWA, add a `manifest.json` and a simple Service Worker file:
 #### 1. Create a `manifest.json` file:
 ```json
 {
-  "name": "Devil Dice 3D",
-  "short_name": "DevilDice",
+  "name": "Dicefall",
+  "short_name": "Dicefall",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#0c0810",

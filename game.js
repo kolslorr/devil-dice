@@ -1,5 +1,5 @@
 /**
- * Devil Dice 3D - Spec-Compliant Game Engine
+ * Dicefall - Spec-Compliant Game Engine
  * Tactile gesture-based 3D dice puzzle. Three.js + Pointer Events.
  * No character avatar - direct dice interaction per html_instructions.md.
  */
@@ -57,8 +57,8 @@ var CELL_TYPE = { EMPTY: 0, ACTIVE: 1, LOCKED: 2 };
 var scene, camera, renderer, diceGroup, boardGroup, worldGroup;
 var grid = [], score = 0, comboCount = 0;
 var sinkingHighlights = [];
-var highScore = localStorage.getItem('devildice_zen_hs') ? parseInt(localStorage.getItem('devildice_zen_hs')) : 0;
-var puzzleProgress = localStorage.getItem('devildice_puzzle_progress') ? parseInt(localStorage.getItem('devildice_puzzle_progress')) : 0;
+var highScore = localStorage.getItem('dicefall_zen_hs') ? parseInt(localStorage.getItem('dicefall_zen_hs')) : 0;
+var puzzleProgress = localStorage.getItem('dicefall_puzzle_progress') ? parseInt(localStorage.getItem('dicefall_puzzle_progress')) : 0;
 var gameState = 'menu', gameMode = 'zen', selectedDifficulty = 'medium', aiDifficulty = 'medium';
 var soundEnabled = true, musicEnabled = true, spawnTimerId = null, activeSinkingGroups = [];
 var totalCells = GRID_COLS * GRID_ROWS, boardSize = '7x7', animationLock = false;
@@ -1626,7 +1626,7 @@ function updateZenEffects() {
         }
     }
 }
-function triggerGameOver() { AudioEngine.stopMenuMusic(); hideAiMoveMarker(); clearZenEffects(); gameState = 'gameover'; stopSpawning(); AudioEngine.stopBGM(); if (gameMode === 'puzzle') { clearAllDice(); restorePuzzleBoardPreset(); } var isBattle = gameMode === 'battle', playerWon = battlePlayerScore >= battleAiScore; var won = (isBattle && playerWon) || (gameMode === 'puzzle' && puzzleCleared); if (won) AudioEngine.playVictory(); else AudioEngine.playDefeat(); if (gameMode === 'battle') { stopAITicks(); stopBattleTimer(); } var isNewHigh = false; if (gameMode !== 'battle' && score > highScore) { highScore = score; localStorage.setItem('devildice_zen_hs', highScore); isNewHigh = true; } document.getElementById('go-score').innerText = (gameMode === 'battle' ? battlePlayerScore : score).toLocaleString(); document.getElementById('go-combo').innerText = comboCount.toString(); document.getElementById('new-high-indicator').style.display = isNewHigh ? 'block' : 'none'; var titleEl = document.getElementById('gameover-title-text'); if (gameMode === 'puzzle') titleEl.innerText = puzzleCleared ? 'ALL PUZZLES CLEARED!' : 'OUT OF MOVES!'; else if (isBattle) titleEl.innerText = playerWon ? 'YOU WIN!' : 'YOU LOSE!'; else titleEl.innerText = 'BOARD FILLED!'; document.getElementById('battle-go-stats').style.display = isBattle ? '' : 'none'; if (isBattle) { document.getElementById('go-player-score').innerText = battlePlayerScore.toLocaleString(); document.getElementById('go-ai-score').innerText = battleAiScore.toLocaleString(); var pr = document.getElementById('go-player-row'), ar = document.getElementById('go-ai-row'); if (playerWon) { pr.classList.add('winner'); ar.classList.remove('winner'); } else { ar.classList.add('winner'); pr.classList.remove('winner'); } } else { document.getElementById('go-player-row').classList.remove('winner'); document.getElementById('go-ai-row').classList.remove('winner'); } document.getElementById('hud-screen').classList.remove('active'); document.getElementById('gameover-screen').classList.add('active'); document.getElementById('battle-timer-box').style.display = 'none'; }
+function triggerGameOver() { AudioEngine.stopMenuMusic(); hideAiMoveMarker(); clearZenEffects(); gameState = 'gameover'; stopSpawning(); AudioEngine.stopBGM(); if (gameMode === 'puzzle') { clearAllDice(); restorePuzzleBoardPreset(); } var isBattle = gameMode === 'battle', playerWon = battlePlayerScore >= battleAiScore; var won = (isBattle && playerWon) || (gameMode === 'puzzle' && puzzleCleared); if (won) AudioEngine.playVictory(); else AudioEngine.playDefeat(); if (gameMode === 'battle') { stopAITicks(); stopBattleTimer(); } var isNewHigh = false; if (gameMode !== 'battle' && score > highScore) { highScore = score; localStorage.setItem('dicefall_zen_hs', highScore); isNewHigh = true; } document.getElementById('go-score').innerText = (gameMode === 'battle' ? battlePlayerScore : score).toLocaleString(); document.getElementById('go-combo').innerText = comboCount.toString(); document.getElementById('new-high-indicator').style.display = isNewHigh ? 'block' : 'none'; var titleEl = document.getElementById('gameover-title-text'); if (gameMode === 'puzzle') titleEl.innerText = puzzleCleared ? 'ALL PUZZLES CLEARED!' : 'OUT OF MOVES!'; else if (isBattle) titleEl.innerText = playerWon ? 'YOU WIN!' : 'YOU LOSE!'; else titleEl.innerText = 'BOARD FILLED!'; document.getElementById('battle-go-stats').style.display = isBattle ? '' : 'none'; if (isBattle) { document.getElementById('go-player-score').innerText = battlePlayerScore.toLocaleString(); document.getElementById('go-ai-score').innerText = battleAiScore.toLocaleString(); var pr = document.getElementById('go-player-row'), ar = document.getElementById('go-ai-row'); if (playerWon) { pr.classList.add('winner'); ar.classList.remove('winner'); } else { ar.classList.add('winner'); pr.classList.remove('winner'); } } else { document.getElementById('go-player-row').classList.remove('winner'); document.getElementById('go-ai-row').classList.remove('winner'); } document.getElementById('hud-screen').classList.remove('active'); document.getElementById('gameover-screen').classList.add('active'); document.getElementById('battle-timer-box').style.display = 'none'; }
 
 function setupPuzzleMode() {
     if (typeof window._puzzleChosenStage === 'number') puzzleStage = window._puzzleChosenStage;
@@ -1668,7 +1668,7 @@ function decrementPuzzleMove() {
         updateScoreDisplay();
         if (puzzleStage > puzzleProgress) {
             puzzleProgress = puzzleStage;
-            localStorage.setItem('devildice_puzzle_progress', String(puzzleProgress));
+            localStorage.setItem('dicefall_puzzle_progress', String(puzzleProgress));
         }
         if (puzzleStage >= puzzleMaxStages) {
             triggerGameOver();

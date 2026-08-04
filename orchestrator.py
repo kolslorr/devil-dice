@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Devil Dice 3D — Multi-Agent Orchestrator
+Dicefall (formerly Devil Dice 3D) — Multi-Agent Orchestrator
 
 Coordinates the self-improvement loop:
 
@@ -88,7 +88,7 @@ def build_architect_prompt(backlog=None, feature_request=None):
     """Build the prompt for the Architect agent (DeepSeek V4 Pro)."""
     line_count = len(GAME_JS.read_text().splitlines())
     prompt_parts = [
-        "# Architect Task: Improve Devil Dice 3D\n",
+        "# Architect Task: Improve Dicefall\n",
         f"**Working directory:** `{ROOT}`\n",
         f"**File to edit:** `game.js` (single-file Three.js game engine, {line_count} lines)\n",
         "**Constraints:**\n",
@@ -411,7 +411,7 @@ def run_cycle(feature_request=None, mode="cycle", patch_path=None):
 
 # ── CLI entry point ──
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Devil Dice 3D Multi-Agent Orchestrator")
+    parser = argparse.ArgumentParser(description="Dicefall Multi-Agent Orchestrator")
     parser.add_argument("--mode", choices=["cycle", "once", "baseline"], default="once",
                        help="cycle=run continuous loop, once=single pass, baseline=capture golden screenshot")
     parser.add_argument("--architect-message", type=str, default=None,

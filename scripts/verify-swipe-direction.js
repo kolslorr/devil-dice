@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Swipe/flick direction accuracy probe for devil-dice.
+// Swipe/flick direction accuracy probe for dicefall.
 // Proves each screen-direction swipe moves the die into the exact grid cell
 // the swipe visually points at (camera-aware), using occupancy as ground truth
 // (source empties, target fills) — NOT die-tracking (autoGameState returns the

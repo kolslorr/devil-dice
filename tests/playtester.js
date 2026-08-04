@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Devil Dice 3D — Headless Playtester
+ * Dicefall — Headless Playtester
  *
  * Launches a headless Chrome via Puppeteer, starts the game with a fixed
  * seed (?seed=) so the board layout is reproducible, simulates 30+ seconds

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Blocked-by-dice probe for devil-dice (req 08: match original rules).
+// Blocked-by-dice probe for dicefall (req 08: match original rules).
 // The OLD behavior: hold-dragging a die into an occupied cell pushed the whole
 // lane forward (chain drag). The ORIGINAL behavior: the die is BLOCKED — no
 // movement at all. This probe verifies:

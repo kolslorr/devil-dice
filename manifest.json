@@ -1,13 +1,13 @@
 {
-  "name": "Devil Dice 3D",
-  "short_name": "DevilDice",
+  "name": "Dicefall",
+  "short_name": "Dicefall",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#0c0810",
   "theme_color": "#ff3366",
   "orientation": "any",
   "categories": ["games", "puzzle"],
-  "description": "A high-fidelity 3D puzzle action game recreating the classic Devil Dice (XI).",
+  "description": "A high-fidelity 3D dice-matching puzzle. Roll the dice, match same faces, and trigger cascading clears across Zen, AI Battle, and 50 handcrafted Puzzle stages.",
   "icons": [
     {
       "src": "icon-192.png",
